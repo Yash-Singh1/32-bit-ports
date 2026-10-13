@@ -227,6 +227,13 @@ int LauncherMain(void) {
     typedef bool (*location_fn)(void *, Location, int, char *, int);
     if (!METHOD(party, 11, location_fn)(party, place, 3, text, sizeof(text)) || strcmp(text, "fixture-party")) return -17;
     void *server = create("SteamGameServer014", 0);
+    typedef void (*heartbeat_interval_fn)(void *, int);
+    typedef void (*heartbeat_force_fn)(void *);
+    METHOD(server, 42, heartbeat_interval_fn)(server, 30);
+    METHOD(server, 43, heartbeat_force_fn)(server);
+    METHOD(server, 42, heartbeat_interval_fn)(server, -1);
+    METHOD(server, 43, heartbeat_force_fn)(server);
+    METHOD(server, 43, heartbeat_force_fn)(server);
     typedef IP (*ip_fn)(void *);
     IP received = METHOD(server, 33, ip_fn)(server);
     if (memcmp(&ip, &received, sizeof(ip))) return -18;

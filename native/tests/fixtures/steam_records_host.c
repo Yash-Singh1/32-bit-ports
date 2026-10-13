@@ -13,6 +13,16 @@ static struct object input6 = {input6_table}, input5 = {input5_table}, controlle
 static struct object storage = {storage_table}, network = {network_table}, party = {party_table}, server = {server_table};
 static struct object timeline = {timeline_table};
 static unsigned timeline_calls;
+static int heartbeat_interval;
+static unsigned heartbeat_calls;
+static void heartbeat_interval_set(void *self, int interval) {
+    if (self != &server || (interval != 30 && interval != -1)) abort();
+    heartbeat_interval = interval;
+}
+static void heartbeat_force(void *self) {
+    if (self != &server || (heartbeat_calls == 0 ? heartbeat_interval != 30 : heartbeat_interval != -1)) abort();
+    ++heartbeat_calls;
+}
 static void *browser_table[17];
 static struct object browser = {browser_table};
 struct list_request { void *handle, *response; bool active, refreshing; ServerFilter **filters; };
@@ -186,7 +196,7 @@ static bool location(void *self, Location value, int kind, char *out, int length
     strcpy(out, "fixture-party"); return true;
 }
 static IP public_ip(void *self) {
-    if (self != &server) abort();
+    if (self != &server || heartbeat_interval != -1 || heartbeat_calls != 3) abort();
     IP ip = {.type = 1}; ip.address[15] = 19; return ip;
 }
 void *CreateInterface(const char *version, int *status) {
@@ -198,6 +208,7 @@ void *CreateInterface(const char *version, int *status) {
     storage_table[26] = details; storage_table[37] = tags;
     network_table[8] = listen_socket; network_table[10] = connection;
     party_table[11] = location; server_table[33] = public_ip;
+    server_table[42] = heartbeat_interval_set; server_table[43] = heartbeat_force;
     timeline_table[0] = timeline_state; timeline_table[1] = timeline_clear;
     timeline_table[2] = timeline_event; timeline_table[3] = timeline_mode;
     browser_table[1] = list_request; browser_table[6] = list_release;
@@ -212,7 +223,10 @@ void *CreateInterface(const char *version, int *status) {
     if (!strcmp(version, "STEAMREMOTESTORAGE_INTERFACE_VERSION016")) return &storage;
     if (!strcmp(version, "SteamNetworking006")) return &network;
     if (!strcmp(version, "SteamParties002")) return &party;
-    if (!strcmp(version, "SteamGameServer014")) return &server;
+    if (!strcmp(version, "SteamGameServer014")) {
+        heartbeat_interval = 0; heartbeat_calls = 0;
+        return &server;
+    }
     if (!strcmp(version, "SteamMatchMakingServers002")) return &browser;
     if (!strcmp(version, "STEAMTIMELINE_INTERFACE_V001")) {
         timeline_calls = 0;

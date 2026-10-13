@@ -163,8 +163,13 @@ for obj in api["interfaces"]:
             continue
         params = []
         ret = "unsupported_private"
-        if name in ("RunFrame", "DestroyAllInterfaces"):
+        if name in ("RunFrame", "DestroyAllInterfaces", "ForceMasterServerHeartbeat_DEPRECATED"):
             ret = "void"
+        # SDK 1.53a's GameServer014 header includes these two private vtable
+        # slots, but steam_api.json omits them. They are real native calls.
+        if name == "SetMasterServerHeartbeatInterval_DEPRECATED":
+            ret = "void"
+            params = [{"paramtype": "int"}]
         if name == "GetCSERIPPort":
             ret = "bool"
             params = [{"paramtype": "uint32 *"}, {"paramtype": "uint16 *"}]

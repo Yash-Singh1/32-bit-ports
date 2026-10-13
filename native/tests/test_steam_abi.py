@@ -49,6 +49,38 @@ with tempfile.TemporaryDirectory(prefix="lp32-steam-abi-") as directory:
         assert f'{{"{name}", \'v\', "{arguments}"}}' in generated, (name, generated)
     assert '"STEAMTIMELINE_INTERFACE_V001"' in generated
 
+    # Valve's GameServer014 header retains private virtual slots that the JSON
+    # omits. Recover the two verified heartbeat signatures without enabling
+    # unknown private functions or shifting the following public ordinal.
+    api["interfaces"].append({"classname": "ISteamGameServer", "version_string": "SteamGameServer014",
+        "methods": [{"methodname": "HeartbeatBefore", "returntype": "int", "params": []},
+                    {"methodname": "HeartbeatAfter", "returntype": "bool", "params": [{"paramtype": "int"}]}]})
+    (root / "isteamgameserver.h").write_text('''#define STEAMGAMESERVER_INTERFACE_VERSION "SteamGameServer014"
+class ISteamGameServer {
+virtual int HeartbeatBefore() = 0;
+STEAM_PRIVATE_API(
+virtual void SetMasterServerHeartbeatInterval_DEPRECATED(int seconds) = 0;
+virtual void ForceMasterServerHeartbeat_DEPRECATED() = 0;
+virtual void UnknownPrivateCallback(void *callback) = 0;
+)
+virtual bool HeartbeatAfter(int value) = 0;
+};
+''')
+    (root / "api.json").write_text(json.dumps(api))
+    subprocess.run([sys.executable, str(native / "tools/generate_steam_abi.py"),
+                    str(root / "api.json"), str(root), str(root / "abi.inc")], check=True)
+    generated = (root / "abi.inc").read_text()
+    private_slots = [('HeartbeatBefore', 'i', ''),
+                     ('SetMasterServerHeartbeatInterval_DEPRECATED', 'v', 'i'),
+                     ('ForceMasterServerHeartbeat_DEPRECATED', 'v', ''),
+                     ('UnknownPrivateCallback', '?', ''), ('HeartbeatAfter', 'b', 'i')]
+    positions = []
+    for name, result, arguments in private_slots:
+        entry = f'{{"{name}", \'{result}\', "{arguments}"}}'
+        assert entry in generated, (entry, generated)
+        positions.append(generated.index(entry))
+    assert positions == sorted(positions), generated
+
     records = [("GetDigitalActionData", "InputDigitalActionData_t", "D"),
                ("GetAnalogActionData", "InputAnalogActionData_t", "A"),
                ("GetMotionData", "InputMotionData_t", "M"),
@@ -72,4 +104,4 @@ with tempfile.TemporaryDirectory(prefix="lp32-steam-abi-") as directory:
     mismatch = subprocess.run(command, capture_output=True, text=True)
     assert mismatch.returncode != 0 and "SDK version mismatch" in mismatch.stderr, mismatch
     assert (root / "abi.inc").read_text() == generated
-print("Steam ABI generation: PASS (pointer depth, string outputs, server-list handles/callbacks, enums, packed returns, legacy ordinals, Timeline001, SDK version validation)")
+print("Steam ABI generation: PASS (pointer depth, string outputs, server-list handles/callbacks, private heartbeat slots, enums, packed returns, legacy ordinals, Timeline001, SDK version validation)")
