@@ -1021,6 +1021,138 @@ static id object_for_argument(uint32_t value)
 void *objc_bridge32_host_object(uint32_t handle) { return object_for_argument(handle); }
 uint32_t objc_bridge32_guest_object(void *object) { return proxy_for_object((id)object); }
 
+static NSWindow *carbon_window_proxy(uint32_t handle)
+{
+    /* Source's windowRef selector returns its registered Cocoa receiver.
+       Reject unknown references before the generic resolver, which can also
+       inspect guest image constant records and needs an initialized image. */
+    bool registered = false;
+    pthread_mutex_lock(&proxy_lock);
+    for (uint32_t i = 0; i < proxy_count; ++i) {
+        if (proxies[i].handle == handle) { registered = true; break; }
+    }
+    pthread_mutex_unlock(&proxy_lock);
+    if (!registered) return nil;
+    id object = object_for_argument(handle);
+    return [object isKindOfClass:[NSWindow class]] ? object : nil;
+}
+
+static NSPoint carbon_window_point(NSPoint screen, NSRect frame)
+{
+    /* HIGeometry.h defines window space at the top-left of the WINDOW
+       STRUCTURE, including the titlebar, rather than the content view. */
+    return NSMakePoint(screen.x - NSMinX(frame), NSMaxY(frame) - screen.y);
+}
+
+static uint32_t carbon_mouse_position32(const uint32_t *arguments)
+{
+    uint32_t output = arguments[2];
+    if (!output || (uint64_t)output + 8 > UINT64_C(0x100000000)) return 0;
+    NSPoint point = NSZeroPoint;
+    if ((arguments[0] == kHICoordSpace72DPIGlobal || arguments[0] == kHICoordSpaceScreenPixel) &&
+        !arguments[1]) {
+        /* This API is available in 64-bit Carbon. HIPoint is CGPoint: native
+           CGFloat fields are doubles, whereas guest fields are floats. */
+        HIPoint native_point = CGPointZero;
+        if (!HIGetMousePosition(arguments[0], NULL, &native_point)) return 0;
+        point = NSMakePoint(native_point.x, native_point.y);
+    } else if (arguments[0] == kHICoordSpaceWindow) {
+        NSWindow *window = carbon_window_proxy(arguments[1]);
+        if (window) point = carbon_window_point([NSEvent mouseLocation], [window frame]);
+    }
+    /* CarbonEventsCore.h specifies a zero point for invalid space/object
+       parameters, and a POINTER return, not an OSStatus. No Carbon HIViewRef
+       mapping is available here; Cocoa NSView proxies are not HIViewRefs. */
+    float guest_point[2] = {(float)point.x, (float)point.y};
+    memcpy((void *)(uintptr_t)output, guest_point, sizeof(guest_point));
+    return output;
+}
+
+static bool carbon_mouse_between(float value, CGFloat before, CGFloat after)
+{
+    return isfinite(value) && value >= fmin(before, after) - 0.02 &&
+           value <= fmax(before, after) + 0.02;
+}
+
+int objc_bridge32_run_hi_mouse_self_test(void)
+{
+    @autoreleasepool {
+        [[NSApplication sharedApplication] setActivationPolicy:NSApplicationActivationPolicyProhibited];
+        NSWindow *window = [[[NSWindow alloc] initWithContentRect:NSMakeRect(100, 200, 320, 240)
+            styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO] autorelease];
+        NSWindow *other = [[[NSWindow alloc] initWithContentRect:NSMakeRect(430, 710, 320, 240)
+            styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO] autorelease];
+        [window setReleasedWhenClosed:NO]; [other setReleasedWhenClosed:NO];
+        uint32_t handles[] = {proxy_for_object(window), proxy_for_object(other)};
+        uint32_t storage = compat_runtime32_allocate(16, 1);
+        if (!storage || !handles[0] || !handles[1]) return -1;
+        uint32_t *guard = (void *)(uintptr_t)storage;
+        float *point = (void *)(uintptr_t)(storage + 4);
+        guard[0] = 0x88776655; guard[3] = 0xaabbccdd;
+        int status = -1;
+        uint64_t result = 0;
+        for (uint32_t space = kHICoordSpace72DPIGlobal; space <= kHICoordSpaceScreenPixel; ++space) {
+            HIPoint before, after;
+            HIGetMousePosition(space, NULL, &before);
+            uint32_t arguments[] = {space, 0, storage + 4};
+            bool handled = objc_bridge32_dispatch("_HIGetMousePosition", arguments, &result);
+            HIGetMousePosition(space, NULL, &after);
+            if (!handled || result != storage + 4 || guard[0] != 0x88776655 || guard[3] != 0xaabbccdd ||
+                !carbon_mouse_between(point[0], before.x, after.x) ||
+                !carbon_mouse_between(point[1], before.y, after.y)) goto finished;
+        }
+        NSWindow *windows[] = {window, other};
+        for (unsigned i = 0; i < 2; ++i) {
+            NSRect frame = [windows[i] frame];
+            NSPoint before = [NSEvent mouseLocation];
+            uint32_t arguments[] = {kHICoordSpaceWindow, handles[i], storage + 4};
+            bool handled = objc_bridge32_dispatch(i ? "HIGetMousePosition" : "_HIGetMousePosition", arguments, &result);
+            NSPoint after = [NSEvent mouseLocation];
+            if (!handled || result != storage + 4 || guard[0] != 0x88776655 || guard[3] != 0xaabbccdd ||
+                !carbon_mouse_between(point[0], before.x - NSMinX(frame), after.x - NSMinX(frame)) ||
+                !carbon_mouse_between(point[1], NSMaxY(frame) - before.y, NSMaxY(frame) - after.y)) goto finished;
+        }
+        /* Test structure-vs-content origin independently with the real native
+           titlebar dimensions. No cursor movement or synthetic events occur. */
+        NSRect frame = [window frame], content = [window contentRectForFrameRect:frame];
+        CGFloat titlebar = NSMaxY(frame) - NSMaxY(content);
+        NSPoint anchor = NSMakePoint(NSMinX(frame) + 17.25, NSMaxY(content) - 9.5);
+        NSPoint relative = carbon_window_point(anchor, frame);
+        if (titlebar <= 0 || relative.x != 17.25 || fabs(relative.y - (titlebar + 9.5)) > 0.001) goto finished;
+
+        uint32_t wrong_class = proxy_for_object(@"not a window");
+        uint32_t invalid[][3] = {
+            {0, 0, storage + 4}, {99, handles[0], storage + 4},
+            {kHICoordSpaceView, handles[0], storage + 4},
+            {kHICoordSpaceWindow, 0, storage + 4},
+            {kHICoordSpaceWindow, UINT32_C(0xfffffff0), storage + 4},
+            {kHICoordSpaceWindow, wrong_class, storage + 4},
+            {kHICoordSpace72DPIGlobal, handles[0], storage + 4}
+        };
+        for (unsigned i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+            point[0] = 1234; point[1] = -5678;
+            if (!objc_bridge32_dispatch("_HIGetMousePosition", invalid[i], &result) || result != storage + 4 ||
+                point[0] != 0 || point[1] != 0 || guard[0] != 0x88776655 || guard[3] != 0xaabbccdd) goto finished;
+        }
+        uint32_t invalid_outputs[][3] = {
+            {kHICoordSpaceWindow, handles[0], 0},
+            {kHICoordSpaceWindow, handles[0], UINT32_C(0xfffffffb)}
+        };
+        point[0] = 1234; point[1] = -5678;
+        for (unsigned i = 0; i < 2; ++i) {
+            if (!objc_bridge32_dispatch("_HIGetMousePosition", invalid_outputs[i], &result) || result ||
+                point[0] != 1234 || point[1] != -5678 || guard[0] != 0x88776655 || guard[3] != 0xaabbccdd) goto finished;
+        }
+        puts("Carbon mouse self-test: PASS (native global/window coordinates, titlebar origin, 8-byte HIPoint, invalid references/spaces/ranges)");
+        status = 0;
+finished:
+        if (status) fputs("compat32: Carbon mouse coordinate/ABI self-test failed\n", stderr);
+        compat_runtime32_deallocate(storage);
+        [window close]; [other close];
+        return status;
+    }
+}
+
 struct guest_runloop_context {
     uint32_t words[10];
     uint32_t callback;
@@ -6274,6 +6406,11 @@ static int objc_bridge32_dispatch_body(const char *import_name,
                                        const uint32_t *arguments,
                                        uint64_t *result)
 {
+    if (LP32_NAME_IS(import_name, import_length, "_HIGetMousePosition") ||
+        LP32_NAME_IS(import_name, import_length, "HIGetMousePosition")) {
+        *result = carbon_mouse_position32(arguments);
+        return 1;
+    }
     if (LP32_NAME_IS(import_name, import_length, "_CGMainDisplayID")) {
         *result = preferred_game_display_id();
         return 1;
