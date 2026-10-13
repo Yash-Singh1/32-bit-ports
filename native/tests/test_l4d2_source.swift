@@ -90,6 +90,60 @@ struct L4D2SourceTests {
         try fm.createSymbolicLink(at: source.appendingPathComponent("compat-runtime"), withDestinationURL: external)
         let output = temp.appendingPathComponent("Output ' $.app")
         let rich = try L4D2Source.discover(source)
+        // Make installs the loader/plist after --copy. Reject redirected write
+        // paths before preparing anything, including loader-promotion paths.
+        let originalImage = try Data(contentsOf: source.appendingPathComponent("hl2_osx"))
+        let native = URL(fileURLWithPath: fm.currentDirectoryPath)
+        let worker = Converter(resources: temp) { _, _ in }
+        for (index, relative) in ["Contents/MacOS", "Contents/MacOS/L4D2Compat",
+                                  "Contents/MacOS/L4D2Compat.new", "Contents/Info.plist",
+                                  "Contents/Resources/game.icns"].enumerated() {
+            let redirectedApp = temp.appendingPathComponent("linked-output-\(index).app")
+            let link = redirectedApp.appendingPathComponent(relative)
+            try fm.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.createSymbolicLink(at: link, withDestinationURL: relative == "Contents/MacOS" ? source : source.appendingPathComponent("hl2_osx"))
+            try rejects("Make write destination linked to original: " + relative) {
+                try rich.prepareBundle(at: redirectedApp)
+            }
+            try rejects("loader-promotion destination linked to original: " + relative) {
+                try L4D2Source.validateBundleOutput(redirectedApp)
+            }
+            do {
+                try worker.run("/usr/bin/make", ["-o", "build/game_loader", "GAME=l4d2",
+                    "SOURCE_GAME=" + source.path, "BUNDLE=" + redirectedApp.path, "promote-loader"], cwd: native)
+                throw ConversionError.message("FAIL: Make promotion accepted linked output")
+            } catch ConversionError.message(let message) {
+                try expect(message.contains("linked write destination"), "Make rejects redirected output before copying/signing")
+            }
+            try expect(try Data(contentsOf: source.appendingPathComponent("hl2_osx")) == originalImage,
+                       "redirected bundle write leaves original launcher untouched")
+            try expect(!fm.fileExists(atPath: source.appendingPathComponent("L4D2Compat").path),
+                       "redirected MacOS destination creates no loader in source")
+        }
+        // Keep promotion independent of source discovery: use the packaging
+        // helper's Mach-O as a dummy loader, without executing it as a game.
+        let mockBuildRelative = "build/l4d2-promotion-test-\(UUID().uuidString)"
+        let mockBuild = native.appendingPathComponent(mockBuildRelative)
+        try fm.createDirectory(at: mockBuild, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: mockBuild) }
+        let compiledHelper = native.appendingPathComponent("build/l4d2_source")
+        try fm.copyItem(at: compiledHelper, to: mockBuild.appendingPathComponent("game_loader"))
+        try fm.copyItem(at: compiledHelper, to: mockBuild.appendingPathComponent("l4d2_source"))
+        let promotionApp = temp.appendingPathComponent("Promotion.app")
+        try fixture(promotionApp, "Contents/MacOS/L4D2Compat", "old loader")
+        try fixture(promotionApp, "Contents/SharedSupport/L4D2/left4dead2/cfg/config.cfg", "keep settings")
+        try fm.copyItem(at: native.appendingPathComponent("Info-L4D2.plist"), to: promotionApp.appendingPathComponent("Contents/Info.plist"))
+        try worker.run("/usr/bin/make", ["-o", mockBuildRelative + "/game_loader", "-o", mockBuildRelative + "/l4d2_source",
+            "BUILD_DIR=" + mockBuildRelative, "GAME=l4d2", "SOURCE_GAME=" + temp.appendingPathComponent("unavailable-game").path,
+            "BUNDLE=" + promotionApp.path, "promote-loader"], cwd: native)
+        try expect(try String(contentsOf: promotionApp.appendingPathComponent("Contents/SharedSupport/L4D2/left4dead2/cfg/config.cfg")) == "keep settings",
+                   "promotion retains settings without source availability")
+        try expect(try Data(contentsOf: promotionApp.appendingPathComponent("Contents/MacOS/L4D2Compat")).prefix(4) == Data(contentsOf: compiledHelper).prefix(4),
+                   "promotion installs a loader without the source")
+        try rejects("direct API output inside selected app resources") {
+            try appLayout.prepareBundle(at: wrapper.appendingPathComponent("Contents/Resources/output.app"))
+        }
+        print("PASS: Make write paths, whole source wrapper, and promotion without source")
         try rich.prepareBundle(at: output)
         let game = output.appendingPathComponent("Contents/SharedSupport/L4D2")
         try expect(try Data(contentsOf: output.appendingPathComponent("Contents/SharedSupport/L4D2.image")) == thin, "private launcher image bytes")

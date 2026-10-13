@@ -6,6 +6,14 @@ import Darwin
 struct L4D2Source {
     static let personalPaths = ["left4dead2/cfg/config.cfg", "left4dead2/cfg/video.txt",
                                 "left4dead2/cfg/videodefaults.txt"]
+    // Include destinations written by Make after source copying and by
+    // promote-loader. Never let a pre-existing output link redirect those
+    // commands to a source file or another directory outside this bundle.
+    static let outputWritePaths = ["", "Contents", "Contents/MacOS", "Contents/MacOS/L4D2Compat",
+        "Contents/MacOS/L4D2Compat.new", "Contents/Info.plist", "Contents/Resources",
+        "Contents/Resources/game.icns", "Contents/SharedSupport", "Contents/SharedSupport/L4D2",
+        "Contents/SharedSupport/L4D2/compat-runtime", "Contents/SharedSupport/L4D2.image"]
+    let selectedSource: URL
     let root: URL
     let image: URL
     let resources: URL?
@@ -31,15 +39,28 @@ struct L4D2Source {
             let resources = root != selected && fm.fileExists(atPath: appResources.path) ? appResources : nil
             let icons = (resources.map { [$0.appendingPathComponent("game.icns")] } ?? []) +
                 [root.appendingPathComponent("left4dead2/resource/game.icns")]
-            return L4D2Source(root: root, image: image, resources: resources,
+            return L4D2Source(selectedSource: selected, root: root, image: image, resources: resources,
                               icon: icons.first { fm.fileExists(atPath: $0.path) })
         }
         throw ConversionError.message("Choose a complete Left 4 Dead 2 Mac game folder containing hl2_osx, left4dead2/gameinfo.txt, and the Mac launcher.dylib. Separate depot folders must first be assembled into one game tree.")
     }
 
     func checkDestination(_ destination: URL) throws {
-        guard !isInside(destination, root) else {
+        guard !isInside(destination, selectedSource), !isInside(destination, root) else {
             throw ConversionError.message("Choose an output folder outside the original game files.")
+        }
+    }
+
+    // This check needs no installed source, so loader promotion can remain
+    // available when the original game volume is not mounted.
+    static func validateBundleOutput(_ app: URL) throws {
+        let fm = FileManager.default
+        for relative in outputWritePaths {
+            let path = relative.isEmpty ? app : app.appendingPathComponent(relative)
+            if let attributes = try? fm.attributesOfItem(atPath: path.path),
+               attributes[.type] as? FileAttributeType == .typeSymbolicLink {
+                throw ConversionError.message("The output bundle contains a linked write destination: \(path.path). Choose a separate output app without these links.")
+            }
         }
     }
 
@@ -57,7 +78,10 @@ struct L4D2Source {
         let resourcesOutput = output.appendingPathComponent("Resources")
         let game = shared.appendingPathComponent("L4D2")
         let imageOutput = shared.appendingPathComponent("L4D2.image")
-        for path in [app, shared, resourcesOutput, game, imageOutput] { try checkDestination(path) }
+        for relative in Self.outputWritePaths {
+            try checkDestination(relative.isEmpty ? app : app.appendingPathComponent(relative))
+        }
+        try Self.validateBundleOutput(app)
         try fm.createDirectory(at: shared, withIntermediateDirectories: true)
         try fm.createDirectory(at: resourcesOutput, withIntermediateDirectories: true)
         let staged = shared.appendingPathComponent(".l4d2-source-\(UUID().uuidString)")

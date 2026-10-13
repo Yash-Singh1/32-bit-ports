@@ -180,7 +180,7 @@ $(BUILD_DIR)/test_l4d2_source: $(L4D2_SOURCE_CORE) tests/test_l4d2_source.swift 
 	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -target $(shell uname -m)-apple-macosx11.0 -sdk $(SDK) $^ -o $@
 
 .PHONY: test-l4d2-source test-l4d2-loader test-l4d2-loader-image test-l4d2-runtime
-test-l4d2-source: $(BUILD_DIR)/test_l4d2_source
+test-l4d2-source: $(BUILD_DIR)/test_l4d2_source $(BUILD_DIR)/l4d2_source
 	./$(BUILD_DIR)/test_l4d2_source
 
 test-l4d2-loader: $(BUILD_DIR)/game_loader
@@ -286,6 +286,9 @@ $(BUILD_DIR)/LEGOPirates.unpacked.macbin: tools/unpack_securom.py $(UNPACK_PYTHO
 ifneq ($(filter $(GAME),portal2 l4d2),)
 bundle: $(BUILD_DIR)/game_loader $(SOURCE_TOOL) $(INFO_PLIST) portal2-runtime
 	./$(SOURCE_TOOL) --copy "$(SOURCE_GAME)" "$(BUNDLE)"
+ifeq ($(GAME),l4d2)
+	./$(SOURCE_TOOL) --check-output "$(BUNDLE)"
+endif
 	mkdir -p "$(BUNDLE)/Contents/MacOS"
 	cp $(BUILD_DIR)/game_loader "$(BUNDLE)/Contents/MacOS/$(LOADER_NAME)"
 	ditto --noextattr --noqtn "$(GUEST_RUNTIME_DIR)" "$(BUNDLE)/Contents/SharedSupport/$(SOURCE_DATA_DIRECTORY)/compat-runtime"
@@ -310,7 +313,13 @@ endif
 
 # Update only the compatibility runtime when the external source-data volume
 # is unavailable. The existing bundle's game data and resources are retained.
+ifeq ($(GAME),l4d2)
+promote-loader: $(BUILD_DIR)/l4d2_source
+endif
 promote-loader: $(BUILD_DIR)/game_loader
+ifeq ($(GAME),l4d2)
+	./$(SOURCE_TOOL) --check-output "$(BUNDLE)"
+endif
 	test -d "$(BUNDLE)/Contents/MacOS"
 	cp $(BUILD_DIR)/game_loader "$(BUNDLE)/Contents/MacOS/$(LOADER_NAME).new"
 	mv "$(BUNDLE)/Contents/MacOS/$(LOADER_NAME).new" "$(BUNDLE)/Contents/MacOS/$(LOADER_NAME)"
