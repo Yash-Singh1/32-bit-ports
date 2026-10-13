@@ -23,5 +23,6 @@ typedef struct {
 typedef struct { int type; uint64_t id; } Location;
 typedef struct { const char **strings; int count; } Tags;
 #pragma pack(pop)
+typedef struct { char key[256], value[256]; } ServerFilter;
 #define DEVICE UINT64_C(0xfedcba9876543210)
 #define ACTION UINT64_C(0xabcdef0123456789)

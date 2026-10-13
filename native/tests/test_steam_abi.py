@@ -19,6 +19,9 @@ with tempfile.TemporaryDirectory(prefix="lp32-steam-abi-") as directory:
         ("PlainBuffer", {"paramtype": "char *"}, "p"),
         ("ScalarOutput", {"paramtype": "uint32 *"}, "p"),
         ("Tags", {"paramtype": "SteamParamStringArray_t *"}, "T"),
+        ("ServerListHandle", {"paramtype": "HServerListRequest"}, "h"),
+        ("ServerListResponse", {"paramtype": "ISteamMatchmakingServerListResponse *"}, "R"),
+        ("ServerListFilters", {"paramtype": "MatchMakingKeyValuePair_t **"}, "F"),
         ("UnknownEnum", {"paramtype": "ENotAnEnum"}, "?"),
         ("ScopedEnum", {"paramtype": "ISteamClient::EButton"}, "i"),
     ]
@@ -69,4 +72,4 @@ with tempfile.TemporaryDirectory(prefix="lp32-steam-abi-") as directory:
     mismatch = subprocess.run(command, capture_output=True, text=True)
     assert mismatch.returncode != 0 and "SDK version mismatch" in mismatch.stderr, mismatch
     assert (root / "abi.inc").read_text() == generated
-print("Steam ABI generation: PASS (pointer depth, string outputs, enums, packed returns, legacy ordinals, Timeline001, SDK version validation)")
+print("Steam ABI generation: PASS (pointer depth, string outputs, server-list handles/callbacks, enums, packed returns, legacy ordinals, Timeline001, SDK version validation)")

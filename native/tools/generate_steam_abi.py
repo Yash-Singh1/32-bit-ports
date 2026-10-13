@@ -74,6 +74,10 @@ def code(t, result=False, output_string=False):
         return "E"
     if t == "HServerListRequest":
         return "h"
+    if t == "ISteamMatchmakingServerListResponse *" and not result:
+        return "R"
+    if t == "MatchMakingKeyValuePair_t **" and not result:
+        return "F"
     if result and (t.startswith("ISteam") and t.endswith("*") or t == "void *"):
         return "o"
     if result and t == "char *":

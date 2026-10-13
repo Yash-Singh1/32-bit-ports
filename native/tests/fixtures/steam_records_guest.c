@@ -25,6 +25,102 @@ static void callback(Event *event) {
     ++event_count;
 }
 static void other_callback(Event *event) { (void)event; ++other_count; }
+typedef void *(*list_request_fn)(void *, unsigned, void *);
+typedef void *(*list_filtered_fn)(void *, unsigned, ServerFilter **, unsigned, void *);
+typedef void (*list_control_fn)(void *, void *);
+typedef bool (*list_refreshing_fn)(void *, void *);
+typedef int (*list_count_fn)(void *, void *);
+typedef void (*list_server_fn)(void *, void *, int);
+struct list_response {
+    void **vtable;
+    void *handle;
+    unsigned responded, failed, completed;
+    uint32_t guard;
+    bool release_on_complete;
+};
+static void *browser;
+static unsigned list_errors;
+static bool list_callback_valid(struct list_response *self, void *handle) {
+    if (self->guard != 0x11223344 || !handle || handle == (void *)0x1110 ||
+        (self->handle && self->handle != handle)) { ++list_errors; return false; }
+    self->handle = handle;
+    /* A nested native call must resolve the same full-width host request. */
+    if (METHOD(browser, 11, list_count_fn)(browser, handle) != 9) { ++list_errors; return false; }
+    return true;
+}
+static void list_responded(struct list_response *self, void *handle, int server) {
+    if (!list_callback_valid(self, handle) || (server != 7 && server != 321)) { ++list_errors; return; }
+    ++self->responded;
+}
+static void list_failed(struct list_response *self, void *handle, int server) {
+    if (!list_callback_valid(self, handle) || server != -3) { ++list_errors; return; }
+    ++self->failed;
+}
+static void list_complete(struct list_response *self, void *handle, int response) {
+    if (!list_callback_valid(self, handle) || response != 2) { ++list_errors; return; }
+    ++self->completed;
+    if (self->release_on_complete) METHOD(browser, 6, list_control_fn)(browser, handle);
+}
+static void *list_response_table[] = {list_responded, list_failed, list_complete};
+static int check_server_lists(void *(*create)(const char *, int *)) {
+    browser = create("SteamMatchMakingServers002", 0);
+    if (!browser) return -23;
+    list_errors = 0;
+    list_request_fn request = METHOD(browser, 1, list_request_fn);
+    list_control_fn release = METHOD(browser, 6, list_control_fn), cancel = METHOD(browser, 8, list_control_fn);
+    list_control_fn refresh = METHOD(browser, 9, list_control_fn);
+    list_refreshing_fn refreshing = METHOD(browser, 10, list_refreshing_fn);
+    list_count_fn count = METHOD(browser, 11, list_count_fn);
+    list_server_fn refresh_server = METHOD(browser, 12, list_server_fn);
+    if (refreshing(browser, 0) || count(browser, 0) || request(browser, 0, 0)) return -24;
+    release(browser, 0); cancel(browser, 0); refresh(browser, 0); refresh_server(browser, 0, 321);
+    struct list_response first = {list_response_table, 0, 0, 0, 0, 0x11223344, false};
+    struct list_response second = {list_response_table, 0, 0, 0, 0, 0x11223344, false};
+    void *a = request(browser, FIXTURE_APP_ID, &first);
+    void *b = request(browser, FIXTURE_APP_ID, &second);
+    if (!a || !b || a == b || a == (void *)0x1110 || b == (void *)0x1110 ||
+        first.handle != a || second.handle != b || first.responded != 1 || second.responded != 1 ||
+        !refreshing(browser, a) || !refreshing(browser, b)) return -25;
+    cancel(browser, a);
+    if (refreshing(browser, a) || count(browser, a) != 9) return -26;
+    refresh(browser, a);
+    if (first.failed != 1 || first.completed != 1 || refreshing(browser, a)) return -27;
+    refresh_server(browser, b, 321);
+    if (second.responded != 2) return -28;
+    release(browser, a);
+    if (refreshing(browser, a) || count(browser, a) || count(browser, (void *)0x1110)) return -29;
+    /* The host reuses the first address; the stale guest identity must not. */
+    first = (struct list_response){list_response_table, 0, 0, 0, 0, 0x11223344, true};
+    void *c = request(browser, FIXTURE_APP_ID, &first);
+    if (!c || c == a || c == b || first.handle != c || count(browser, a)) return -30;
+    refresh(browser, c); /* release nested in completion */
+    if (first.failed != 1 || first.completed != 1 || refreshing(browser, c) || count(browser, c)) return -31;
+    release(browser, c); /* rejected stale identity must never reach the host */
+    release(browser, b);
+    void *d = request(browser, FIXTURE_APP_ID, 0);
+    if (!d || d == a || d == b || d == c || !refreshing(browser, d)) return -32;
+    release(browser, d);
+    ServerFilter filters[2] = {{"map", "c1m1_hotel"}, {"gametagsand", "coop"}};
+    struct { uint32_t before; ServerFilter *pointer; uint32_t after; } cell = {0x88776655, filters, 0xaabbccdd};
+    unsigned slots[] = {0, 2, 3, 4, 5};
+    for (unsigned i = 0; i < 5; ++i) {
+        filters[0].key[0] = 'm';
+        first = (struct list_response){list_response_table, 0, 0, 0, 0, 0x11223344, false};
+        list_filtered_fn filtered = METHOD(browser, slots[i], list_filtered_fn);
+        void *e = filtered(browser, FIXTURE_APP_ID, &cell.pointer, 2, &first);
+        if (!e || first.handle != e || cell.before != 0x88776655 || cell.after != 0xaabbccdd ||
+            cell.pointer != filters) return -34;
+        filters[0].key[0] = 'X'; /* native retained records must outlive guest input */
+        if (count(browser, e) != 9) return -35;
+        release(browser, e);
+    }
+    list_filtered_fn filtered = METHOD(browser, 0, list_filtered_fn);
+    if (filtered(browser, FIXTURE_APP_ID, 0, 2, 0) || filtered(browser, FIXTURE_APP_ID, &cell.pointer, 65537, 0)) return -36;
+    void *empty = filtered(browser, FIXTURE_APP_ID, 0, 0, 0);
+    if (!empty || count(browser, empty) != 9) return -37;
+    release(browser, empty);
+    return list_errors ? -33 : 0;
+}
 int LauncherMain(void) {
     const char *app_identity = getenv("SteamAppId"), *game_identity = getenv("SteamGameId");
     if (!app_identity || !game_identity ||
@@ -113,6 +209,8 @@ int LauncherMain(void) {
     typedef IP (*ip_fn)(void *);
     IP received = METHOD(server, 33, ip_fn)(server);
     if (memcmp(&ip, &received, sizeof(ip))) return -18;
+    int list_error = check_server_lists(create);
+    if (list_error) return list_error;
     int zlib_error = check_zlib();
     return zlib_error ? zlib_error : 26;
 }
