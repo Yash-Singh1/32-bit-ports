@@ -21,7 +21,7 @@ Supported and candidate games:
 | LEGO Batman 3: Beyond Gotham | Feral, 2014 | - |
 | The LEGO Movie Videogame | Feral, 2014 | - |
 | Portal 2 | Valve, 2011 | Experimental: main menu and first level render; gameplay checks ongoing |
-| Left 4 Dead 2 | Valve, 2010 | Experimental: command-line loader and bundle support; gameplay checks ongoing |
+| Left 4 Dead 2 | Valve, 2010 | Experimental: loader, bundle and movie playback; gameplay checks ongoing |
 
 \* Not verified with a 100% run yet, report any bugs or problems in the issues tab.
 
@@ -44,6 +44,8 @@ The initial validation goal is sustained offline campaign play with bots,
 graphics, audio, keyboard/mouse input, map transitions, and settings retained
 after relaunch and rebuild. Online multiplayer, voice chat, controllers, and
 Workshop compatibility are not established by loader or bundle tests.
+The QuickTime shim uses AVFoundation for the Mac build's supplied movies;
+startup intro video and audio have been confirmed in the game window.
 Build requirements, diagnostic launches, and test instructions are in
 [native/L4D2.md](native/L4D2.md).
 
