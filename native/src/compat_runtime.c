@@ -4,6 +4,8 @@
 #include "wide_format.h"
 #include "audio_bridge.h"
 #include "audio_converter_bridge.h"
+#include "quicktime_support.h"
+#include "quicktime_bridge.h"
 #include "controller_bridge.h"
 #include "game_profile.h"
 #include "guest_dyld.h"
@@ -3447,6 +3449,9 @@ static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
     dispatch_name_length = strlen(name);
     dispatch_name_matched = false;
     uint64_t network_result;
+    if (lp32_profile()->title == LP32_TITLE_L4D2 &&
+        (quicktime_support32_dispatch(name, arguments, &network_result) ||
+         quicktime_bridge32_dispatch(name, arguments, &network_result))) return network_result;
     if (steam_bridge32_dispatch(name, arguments, &network_result)) return network_result;
     if (zlib_bridge32_dispatch(name, arguments, &network_result)) return network_result;
     if (time_manager_bridge32_dispatch(name, arguments, &network_result)) return network_result;
