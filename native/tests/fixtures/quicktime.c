@@ -49,6 +49,18 @@ static int16_t open_file(const char *path, int16_t *file)
     return 0;
 }
 
+static uint32_t pixel_signature(const unsigned char *pixels, int stride, int width, int height)
+{
+    uint32_t hash = 2166136261u;
+    /* Sample the full image, including each component, rather than accepting
+       alpha alone as evidence of a progressing movie. */
+    for (int y = 0; y < height; y += height / 31 + 1)
+        for (int x = 0; x < width; x += width / 63 + 1)
+            for (unsigned c = 0; c < 4; ++c)
+                hash = (hash ^ pixels[(size_t)y * stride + (size_t)x * 4 + c]) * 16777619u;
+    return hash;
+}
+
 int check_quicktime(void)
 {
     if (!getenv("LP32_FIXTURE_QUICKTIME")) return 0;
@@ -114,25 +126,36 @@ int check_quicktime(void)
     if (QTNewGWorld(&world.value,0x42475241,rect,0,0,0) || !world.value ||
         world.guard != 0x12345678) return -970;
     map = get_map(world.value);
+    if (!lock(map)) return -972;
+    pixels = get_base(map);
+    int32_t stride = get_stride(map);
+    if (!pixels || stride < width * 4) return -973;
+    uint32_t empty = pixel_signature(pixels,stride,width,height);
+    unlock(map);
     SetMovieGWorld(movie.value,world.value,0);
     SetMovieTimeValue(movie.value,0);
     StartMovie(movie.value);
-    unsigned hash = 0;
-    for (unsigned attempt = 0; !hash && attempt < 100; ++attempt) {
+    uint32_t first_frame = 0;
+    int saw_frame = 0, progressed = 0;
+    for (unsigned attempt = 0; !progressed && attempt < 200; ++attempt) {
         if (UpdateMovie(movie.value)) return -971;
         MoviesTask(movie.value,10);
         if (!lock(map)) return -972;
         pixels = get_base(map);
-        int32_t stride = get_stride(map);
+        stride = get_stride(map);
         if (!pixels || stride < width * 4) return -973;
-        for (int y = 0; y < height; y += height / 8 + 1)
-            for (int x = 0; x < width * 4; x += 101) hash |= pixels[(size_t)y * stride + x];
+        uint32_t hash = pixel_signature(pixels,stride,width,height);
+        if (hash != empty) {
+            if (!saw_frame) { first_frame = hash; saw_frame = 1; }
+            else if (hash != first_frame) progressed = 1;
+        }
         unlock(map);
-        if (!hash) usleep(20000);
+        if (!progressed) usleep(20000);
     }
     StopMovie(movie.value);
     DisposeMovie(movie.value);
     dispose(world.value);
     ExitMovies();
-    return hash ? 0 : -974;
+    if (!progressed) printf("QuickTime fixture frozen pixels: sawFrame=%d firstHash=%08x\n",saw_frame,first_frame);
+    return progressed ? 0 : -974;
 }
