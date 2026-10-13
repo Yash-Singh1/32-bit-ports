@@ -30,6 +30,8 @@ exports:
     (root / "helper.S").write_text(".text\n.globl dyld_stub_binding_helper\ndyld_stub_binding_helper:\n ud2\n")
     flags = ["xcrun", "clang", "-target", "i386-apple-macos10.6", "-nostdlib", "-O2",
              "-fno-builtin", "-L" + str(root), "-lSystem", str(root / "helper.S")]
+    if os.environ.get("LP32_I386_LINKER"):
+        flags.append("-fuse-ld=" + os.environ["LP32_I386_LINKER"])
     build(*flags, "-Wl,-e,_start", str(root / "start.S"), "-o", str(root / "portal2_osx"))
     for module, exported in (("engine", "fixture_value"), ("server", "fixture_classes")):
         build(*flags, "-dynamiclib", "-Wl,-install_name,@loader_path/" + module + ".dylib",

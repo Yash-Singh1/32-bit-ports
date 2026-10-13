@@ -26,6 +26,10 @@ static void callback(Event *event) {
 }
 static void other_callback(Event *event) { (void)event; ++other_count; }
 int LauncherMain(void) {
+    const char *app_identity = getenv("SteamAppId"), *game_identity = getenv("SteamGameId");
+    if (!app_identity || !game_identity ||
+        strcmp(app_identity, FIXTURE_STRINGIFY(FIXTURE_APP_ID)) ||
+        strcmp(game_identity, FIXTURE_STRINGIFY(FIXTURE_APP_ID))) return -21;
     event_count = other_count = 0;
     void *library = dlopen(getenv("LP32_STEAM_FIXTURE"), RTLD_NOW);
     void *(*create)(const char *, int *) = dlsym(library, "CreateInterface");
@@ -64,7 +68,7 @@ int LauncherMain(void) {
     details_fn details = METHOD(storage, 26, details_fn);
     struct { uint32_t before; char *name; uint32_t after; } out = {0x11223344, 0, 0xaabbccdd};
     unsigned app = 0; int size = 0; uint64_t owner = 0;
-    if (!details(storage, 2, &app, &out.name, &size, &owner) || app != 620 || size != 4096 ||
+    if (!details(storage, 2, &app, &out.name, &size, &owner) || app != FIXTURE_APP_ID || size != 4096 ||
         owner != DEVICE || strcmp(out.name, "workshop/chamber-2.bsp") ||
         out.before != 0x11223344 || out.after != 0xaabbccdd) return -9;
     char *saved = out.name;

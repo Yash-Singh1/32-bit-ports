@@ -59,7 +59,7 @@ static bool details(void *self, uint64_t h, unsigned *app, char **name, int *siz
         filename = (char *)(uintptr_t)(address + 0xe67);
     }
     snprintf(filename, 80, "workshop/chamber-%llu.bsp", h);
-    if (app) *app = 620; if (size) *size = 4096; if (owner) *owner = DEVICE;
+    if (app) *app = FIXTURE_APP_ID; if (size) *size = 4096; if (owner) *owner = DEVICE;
     if (name) *name = filename; return true;
 }
 static bool tags(void *self, uint64_t h, const Tags *list) {

@@ -1,6 +1,11 @@
 /* Independent SDK-shaped declarations compiled for BOTH test architectures. */
 #include <stdint.h>
 #include <stdbool.h>
+#ifndef FIXTURE_APP_ID
+#define FIXTURE_APP_ID 620
+#endif
+#define FIXTURE_STRINGIFY_INNER(value) #value
+#define FIXTURE_STRINGIFY(value) FIXTURE_STRINGIFY_INNER(value)
 #pragma pack(push, 1)
 typedef struct { bool bState, bActive; } Digital;
 typedef struct { int eMode; float x, y; bool bActive; } Analog;
