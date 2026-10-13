@@ -270,8 +270,11 @@ int guest_dyld32_initialize(const char *image_path)
     *slash = 0;
     char *support = strrchr(path, '/');
     if (support && !strcmp(support, "/SharedSupport")) {
-        if (strlen(path) + sizeof("/Portal2") > sizeof(path)) return fail("game path is too long");
-        strcat(path, "/Portal2");
+        const char *directory = lp32_profile()->source_data_directory;
+        if (!directory || !directory[0]) return fail("missing Source data directory in game profile");
+        size_t length = strlen(path);
+        int n = snprintf(path + length, sizeof(path) - length, "/%s", directory);
+        if (n < 0 || (size_t)n >= sizeof(path) - length) return fail("game path is too long");
     }
     if (!realpath(path, game_root)) return fail("game directory: %s", strerror(errno));
     char launcher[PATH_MAX];

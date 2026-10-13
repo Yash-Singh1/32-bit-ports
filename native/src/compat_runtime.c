@@ -1302,7 +1302,7 @@ static int build_transition_bridge(void)
 
 static uint32_t guest_thunk_for_dynamic_symbol(const char *name)
 {
-    if (lp32_profile()->title == LP32_TITLE_PORTAL2) {
+    if (lp32_profile_is_source()) {
         const uint8_t *entry = NULL;
         if (!strcmp(name, "_setjmp")) entry = lp32_context_setjmp;
         else if (!strcmp(name, "__setjmp")) entry = lp32_context_fast_setjmp;
@@ -2904,7 +2904,7 @@ static void *run_guest_thread(void *opaque)
     if (getenv("LP32_TRACE_THREADS")) {
         uint64_t thread_id = 0;
         pthread_threadid_np(NULL, &thread_id);
-        if (lp32_profile()->title == LP32_TITLE_PORTAL2) {
+        if (lp32_profile()->thread_argument_is_direct) {
             fprintf(stderr, "compat32: guest thread tid=%llu entry=0x%08x argument=0x%08x\n",
                     (unsigned long long)thread_id, context.function, context.argument);
         } else {
@@ -3111,7 +3111,7 @@ static uint64_t dispatch_import_chained(uint32_t import_id, const char *name,
 uint32_t *lp32_adjust_import_stack(uint32_t *stack)
 {
     const char *name = import_name_for_id(stack[0]);
-    if (lp32_profile()->title == LP32_TITLE_PORTAL2 &&
+    if (lp32_profile()->callee_pops_struct_return &&
         (!strcmp(name, "_objc_msgSend_stret") || !strcmp(name, "_CGDisplayBounds") ||
          !strcmp(name, "_CFUUIDGetUUIDBytes") ||
          !strcmp(name, "_CFAbsoluteTimeGetGregorianDate") ||
@@ -3825,11 +3825,13 @@ static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
                              arguments[0] ? arguments[1] : sizeof(buffer));
         return result ? (arguments[0] ? arguments[0] : compat_runtime32_copy_cstring(result)) : 0;
     }
-    if (import_is(name, "__NSGetExecutablePath") && lp32_profile()->title == LP32_TITLE_PORTAL2) {
+    if (import_is(name, "__NSGetExecutablePath") && lp32_profile_is_source()) {
         char path[PATH_MAX];
-        int n = snprintf(path, sizeof(path), "%s/portal2_osx", guest_dyld32_game_root());
+        const char *executable = lp32_profile()->source_executable;
+        if (!executable || !executable[0]) return (uint32_t)-1;
+        int n = snprintf(path, sizeof(path), "%s/%s", guest_dyld32_game_root(), executable);
         uint32_t *size = (void *)(uintptr_t)arguments[1];
-        if (n < 0 || !size) return (uint32_t)-1;
+        if (n < 0 || (size_t)n >= sizeof(path) || !size) return (uint32_t)-1;
         if (*size <= (uint32_t)n) { *size = (uint32_t)n + 1; return (uint32_t)-1; }
         memcpy((void *)(uintptr_t)arguments[0], path, (size_t)n + 1);
         return 0;
@@ -4028,20 +4030,20 @@ static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
         return value ? 0 : 1;
     }
     if (import_is(name, "_dlopen")) {
-        if (lp32_profile()->title == LP32_TITLE_PORTAL2) {
+        if (lp32_profile_is_source()) {
             return guest_dyld32_open((const char *)(uintptr_t)arguments[0], (int)arguments[1]);
         }
         return 1;
     }
     if (import_is(name, "_dlsym")) {
         const char *symbol = (const char *)(uintptr_t)arguments[1];
-        if (lp32_profile()->title == LP32_TITLE_PORTAL2) return guest_dyld32_symbol(arguments[0], symbol);
+        if (lp32_profile_is_source()) return guest_dyld32_symbol(arguments[0], symbol);
         if (!symbol || !dlsym(RTLD_DEFAULT, symbol)) return 0;
         return guest_thunk_for_dynamic_symbol(symbol);
     }
     if (import_is(name, "_dlerror")) return guest_dyld32_error();
     if (import_is(name, "_dlclose")) {
-        return lp32_profile()->title == LP32_TITLE_PORTAL2 ?
+        return lp32_profile_is_source() ?
             (uint32_t)guest_dyld32_close(arguments[0]) : 0;
     }
     if (import_is(name, kControllerGlyphCallbackName)) {
@@ -5036,7 +5038,7 @@ static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
         struct guest_thread_context *context = malloc(sizeof(*context));
         if (!context) return (uint32_t)ENOMEM;
         context->function = arguments[2];
-        if (lp32_profile()->title == LP32_TITLE_PORTAL2) {
+        if (lp32_profile()->thread_argument_is_direct) {
             context->argument = arguments[3];
         } else {
             /* The engine's sole pthread_create site (Pirates 0x2fxxxx, Clone
@@ -5078,7 +5080,7 @@ static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
         uint32_t *guest_thread = (void *)(uintptr_t)arguments[0];
         if (guest_thread) {
             static uint32_t next_handle = 1;
-            *guest_thread = lp32_profile()->title == LP32_TITLE_PORTAL2 ?
+            *guest_thread = lp32_profile_is_source() ?
                 source_thread_handle(thread) : __atomic_fetch_add(&next_handle, 1, __ATOMIC_RELAXED);
         }
         return 0;
@@ -5198,7 +5200,7 @@ static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
         return 0;
     }
 
-    if (lp32_profile()->title == LP32_TITLE_PORTAL2 && !strncmp(name, "_IO", 3)) {
+    if (lp32_profile_is_source() && !strncmp(name, "_IO", 3)) {
         uint64_t result = 0;
         if (objc_bridge32_dispatch(name, arguments, &result)) return result;
     }
@@ -5232,7 +5234,7 @@ static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
     }
     if (import_is(name, "_IOServiceAddInterestNotification") ||
         import_is(name, "_IOServiceAddMatchingNotification")) return UINT32_C(0xe00002c7);
-    if (lp32_profile()->title != LP32_TITLE_PORTAL2 &&
+    if (!lp32_profile_is_source() &&
         (import_is(name, "_CFRunLoopAddSource") || import_is(name, "_CFRunLoopRemoveSource") ||
          import_is(name, "_CFRunLoopContainsSource"))) return 0;
 
@@ -5334,7 +5336,7 @@ static uint64_t dispatch_bridge_stages(uint32_t import_id, const char *name,
             " args=%08" PRIx32 ",%08" PRIx32 ",%08" PRIx32 ",%08" PRIx32 "\n",
             import_id, name, return_address, arguments[0], arguments[1],
             arguments[2], arguments[3]);
-    if (lp32_profile()->title == LP32_TITLE_PORTAL2) {
+    if (lp32_profile_is_source()) {
         /* A trap on Source's worker thread must not leave its Cocoa main
            loop running indefinitely after the worker has escaped. */
         fflush(NULL);
