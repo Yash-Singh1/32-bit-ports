@@ -4026,6 +4026,18 @@ static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
         if (arguments[1]) *(uint32_t *)(uintptr_t)arguments[1] = (uint32_t)(uintptr_t)end;
         return result;
     }
+    if (import_is(name, "_strtof")) {
+        if (!arguments[0] || (arguments[1] &&
+            (uint64_t)arguments[1] + sizeof(uint32_t) > UINT64_C(0x100000000))) {
+            errno = EINVAL;
+            return return_guest_float(0);
+        }
+        char *end = NULL;
+        float result = strtof((const char *)(uintptr_t)arguments[0], &end);
+        /* Host char* is eight bytes; only write the guest's four-byte cell. */
+        if (arguments[1]) *(uint32_t *)(uintptr_t)arguments[1] = (uint32_t)(uintptr_t)end;
+        return return_guest_float(result);
+    }
     if (import_is(name, "_strtod") || import_is(name, "_atof")) {
         char *end = NULL;
         double result = strtod((const char *)(uintptr_t)arguments[0], &end);
@@ -4760,10 +4772,11 @@ static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
         unlock_host_file();
         return (uint32_t)offset;
     }
-    if (import_is(name, "_ferror")) {
+    if (import_is(name, "_ferror") || import_is(name, "_feof")) {
+        bool eof = import_is(name, "_feof");
         FILE *file = lock_host_file_for_guest(arguments[0]);
-        if (!file) return 1;
-        uint32_t result = (uint32_t)ferror(file);
+        if (!file) return eof ? 0 : 1; /* EBADF, not a fabricated EOF. */
+        uint32_t result = (uint32_t)(eof ? feof(file) : ferror(file));
         unlock_host_file();
         return result;
     }
