@@ -118,6 +118,10 @@ $(BUILD_DIR)/test_cursor_state: tests/test_cursor_state.c src/cursor_state.c src
 test-cursor-state: $(BUILD_DIR)/test_cursor_state
 	arch -x86_64 ./$(BUILD_DIR)/test_cursor_state
 
+.PHONY: test-hi-mouse
+test-hi-mouse: $(BUILD_DIR)/game_loader
+	python3 tests/test_hi_mouse.py --loader $(BUILD_DIR)/game_loader
+
 .PHONY: portal2-runtime
 portal2-runtime:
 	python3 tools/prepare_portal2_runtime.py --output "$(GUEST_RUNTIME_DIR)"

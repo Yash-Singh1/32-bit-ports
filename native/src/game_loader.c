@@ -806,6 +806,10 @@ int main(int argc, char **argv)
         return objc_bridge32_run_proxy_self_test() == 0 ?
             EXIT_SUCCESS : EXIT_FAILURE;
     }
+    if (getenv("LP32_HI_MOUSE_SELFTEST")) {
+        return objc_bridge32_run_hi_mouse_self_test() == 0 ?
+            EXIT_SUCCESS : EXIT_FAILURE;
+    }
     char image_path_buffer[PATH_MAX];
     const char *image_path = NULL;
     const struct lp32_game_profile *profile_hint = NULL;
