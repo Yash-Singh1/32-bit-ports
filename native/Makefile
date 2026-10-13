@@ -232,6 +232,14 @@ $(BUILD_DIR)/game_loader: src/game_loader.c src/crash_trace.c src/crash_trace.h 
 	codesign --force --sign - $@
 
 $(BUILD_DIR)/game_loader: src/game_profile.h
+$(BUILD_DIR)/game_loader: src/audio_converter_bridge.c src/audio_converter_bridge.h
+
+.PHONY: test-audio-converter
+$(BUILD_DIR)/test_audio_converter_bridge: tests/test_audio_converter_bridge.c src/audio_converter_bridge.c src/audio_converter_bridge.h | $(BUILD_DIR)
+	$(CLANG) $(CFLAGS) -Isrc tests/test_audio_converter_bridge.c src/audio_converter_bridge.c -framework AudioToolbox -pthread -Wl,-no_pie,-pagezero_size,0x1000,-segaddr,__TEXT,0x100000000 -o $@
+
+test-audio-converter: $(BUILD_DIR)/test_audio_converter_bridge
+	arch -x86_64 ./$(BUILD_DIR)/test_audio_converter_bridge
 
 $(BUILD_DIR)/test_arb_sampler_usage: tests/test_arb_sampler_usage.c src/arb_sampler_usage.c src/arb_sampler_usage.h | $(BUILD_DIR)
 	$(CLANG) $(CFLAGS) -Isrc tests/test_arb_sampler_usage.c src/arb_sampler_usage.c -o $@
