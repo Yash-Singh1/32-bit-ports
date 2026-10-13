@@ -2655,7 +2655,8 @@ static void portal_flush_buffer(NSOpenGLContext *context)
 {
     static int stats_enabled = -1;
     if (stats_enabled < 0)
-        stats_enabled = getenv("LP32_PORTAL_FRAME_STATS") != NULL ||
+        stats_enabled = getenv("LP32_SOURCE_FRAME_STATS") != NULL ||
+                        getenv("LP32_PORTAL_FRAME_STATS") != NULL ||
                         compat_runtime32_frame_profile_enabled;
     uint64_t start = stats_enabled ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
     capture_game_frame(objc_bridge_swap_count + 1);
@@ -2678,9 +2679,10 @@ static void portal_flush_buffer(NSOpenGLContext *context)
                 pthread_mutex_unlock(&portal_cursor_lock);
                 NSRect window_frame = [NSThread isMainThread] ?
                     [portal_cursor_window frame] : NSZeroRect;
-                fprintf(stderr, "compat32: Portal frames swap=%llu focused=%d fps=%.2f "
+                fprintf(stderr, "compat32: %s frames swap=%llu focused=%d fps=%.2f "
                         "mean=%.2fms p50=%.2fms p95=%.2fms p99=%.2fms "
                         "flush=%.2fms draws=%.0f window={%.0f,%.0f,%.0f,%.0f}\n",
+                        lp32_profile()->display_name,
                         (unsigned long long)objc_bridge_swap_count, focused,
                         1e9 * count / total, (double)total / count / 1e6,
                         durations[count / 2] / 1e6, durations[count * 95 / 100] / 1e6,
