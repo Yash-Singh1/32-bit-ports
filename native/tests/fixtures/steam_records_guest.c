@@ -37,6 +37,8 @@ struct list_response {
     unsigned responded, failed, completed;
     uint32_t guard;
     bool release_on_complete;
+    bool release_on_responded;
+    bool release_on_failed;
 };
 static void *browser;
 static unsigned list_errors;
@@ -51,10 +53,12 @@ static bool list_callback_valid(struct list_response *self, void *handle) {
 static void list_responded(struct list_response *self, void *handle, int server) {
     if (!list_callback_valid(self, handle) || (server != 7 && server != 321)) { ++list_errors; return; }
     ++self->responded;
+    if (self->release_on_responded) METHOD(browser, 6, list_control_fn)(browser, handle);
 }
 static void list_failed(struct list_response *self, void *handle, int server) {
     if (!list_callback_valid(self, handle) || server != -3) { ++list_errors; return; }
     ++self->failed;
+    if (self->release_on_failed) METHOD(browser, 6, list_control_fn)(browser, handle);
 }
 static void list_complete(struct list_response *self, void *handle, int response) {
     if (!list_callback_valid(self, handle) || response != 2) { ++list_errors; return; }
@@ -85,8 +89,9 @@ static int check_server_lists(void *(*create)(const char *, int *)) {
     if (refreshing(browser, a) || count(browser, a) != 9) return -26;
     refresh(browser, a);
     if (first.failed != 1 || first.completed != 1 || refreshing(browser, a)) return -27;
+    second.release_on_responded = true;
     refresh_server(browser, b, 321);
-    if (second.responded != 2) return -28;
+    if (second.responded != 2 || count(browser, b)) return -28;
     release(browser, a);
     if (refreshing(browser, a) || count(browser, a) || count(browser, (void *)0x1110)) return -29;
     /* The host reuses the first address; the stale guest identity must not. */
@@ -116,9 +121,25 @@ static int check_server_lists(void *(*create)(const char *, int *)) {
     }
     list_filtered_fn filtered = METHOD(browser, 0, list_filtered_fn);
     if (filtered(browser, FIXTURE_APP_ID, 0, 2, 0) || filtered(browser, FIXTURE_APP_ID, &cell.pointer, 65537, 0)) return -36;
+    if (filtered(browser, FIXTURE_APP_ID, (ServerFilter **)UINT32_C(0xfffffffd), 1, 0)) return -38;
+    cell.pointer = (ServerFilter *)UINT32_C(0xfffffff0);
+    if (filtered(browser, FIXTURE_APP_ID, &cell.pointer, 1, 0) ||
+        cell.before != 0x88776655 || cell.after != 0xaabbccdd) return -39;
+    struct list_response invalid = {(void **)UINT32_C(0xfffffff9), 0, 0, 0, 0, 0x11223344, false};
+    if (request(browser, FIXTURE_APP_ID, &invalid) ||
+        request(browser, FIXTURE_APP_ID, (void *)UINT32_C(0xfffffffd))) return -40;
+    cell.pointer = filters;
     void *empty = filtered(browser, FIXTURE_APP_ID, 0, 0, 0);
     if (!empty || count(browser, empty) != 9) return -37;
     release(browser, empty);
+    first = (struct list_response){list_response_table, 0, 0, 0, 0, 0x11223344, false, true};
+    if (request(browser, FIXTURE_APP_ID, &first) || !first.handle || first.responded != 1 ||
+        count(browser, first.handle)) return -41; /* release during creation */
+    first = (struct list_response){list_response_table, 0, 0, 0, 0, 0x11223344, false, false, true};
+    void *last = request(browser, FIXTURE_APP_ID, &first);
+    if (!last) return -42;
+    refresh(browser, last); /* release cancels the later completion callback */
+    if (first.failed != 1 || first.completed || count(browser, last)) return -43;
     return list_errors ? -33 : 0;
 }
 int LauncherMain(void) {

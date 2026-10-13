@@ -43,6 +43,7 @@ static void *list_request(void *self, unsigned app, void *response) {
         *r = (struct list_request){(void *)list_handles[i], response, true, true};
         /* Deliberately synchronous, before the returned handle is published. */
         list_callback(r, 0, 7);
+        if (!r->active) abort(); /* release must await completion of creation */
         return r->handle;
     }
     abort();
@@ -69,6 +70,7 @@ static void list_refresh(void *self, void *handle) {
     r->refreshing = false;
     /* The guest may release the request inside this completion callback. */
     list_callback(r, 2, 2);
+    if (!r->active) abort(); /* release must await the outer refresh return */
 }
 static bool list_is_refreshing(void *self, void *handle) {
     struct list_request *r = list_for(self, handle);
@@ -95,6 +97,7 @@ static void list_refresh_server(void *self, void *handle, int server) {
     if (server != 321) abort();
     pthread_t worker;
     if (pthread_create(&worker, 0, list_worker, r) || pthread_join(worker, 0)) abort();
+    if (!r->active) abort(); /* worker callback must not free an in-flight h */
 }
 static void timeline_state(void *self, const char *description, float offset) {
     if (self != &timeline || strcmp(description, "fixture state") || offset != -1.25f || timeline_calls++ != 0) abort();

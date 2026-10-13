@@ -36,12 +36,17 @@ struct server_request {
     void *owner, *host;
     void *filters, *filter_records;
     uint32_t guest, response;
-    unsigned references;
-    bool active, creating;
+    unsigned references, native_calls;
+    bool active, creating, release_pending;
 };
 static struct server_request *server_requests;
 static uint32_t next_server_request = 0xf9600001;
 static pthread_mutex_t server_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static bool server_guest_range(uint32_t pointer, uint64_t size)
+{
+    return pointer && (uint64_t)pointer + size <= UINT64_C(0x100000000);
+}
 
 static void server_request_drop(struct server_request *request)
 {
@@ -71,12 +76,29 @@ static struct server_request *server_request_get(void *owner, uint32_t guest, bo
         if (r->owner == owner && r->guest == guest && r->active && r->host) {
             found = r;
             ++r->references;
-            if (release) server_request_retire(r);
+            if (release) { server_request_retire(r); r->release_pending = true; }
+            else ++r->native_calls;
             break;
         }
     }
     pthread_mutex_unlock(&server_lock);
     return found;
+}
+
+static void server_request_finish(struct server_request *request, bool native_call)
+{
+    if (!request) return;
+    pthread_mutex_lock(&server_lock);
+    if (native_call) --request->native_calls;
+    bool release = request->release_pending && !request->native_calls;
+    if (release) request->release_pending = false;
+    pthread_mutex_unlock(&server_lock);
+    /* Never wait for a native call: its callback may have requested release
+       on another thread while the native caller is waiting for that thread.
+       The last native caller performs the deferred release with its own ref. */
+    if (release) ((void (*)(void *, void *))(*(void ***)request->owner)[6])(
+        request->owner, request->host);
+    server_request_drop(request);
 }
 
 static void server_response(struct server_request *request, void *host, unsigned slot, int value)
@@ -94,7 +116,13 @@ static void server_response(struct server_request *request, void *host, unsigned
     pthread_mutex_unlock(&server_lock);
     if (!object) return;
     uint32_t vtable, function;
+    if (!server_guest_range(object, sizeof(vtable))) {
+        server_request_drop(request); return;
+    }
     memcpy(&vtable, (void *)(uintptr_t)object, sizeof(vtable));
+    if (!server_guest_range(vtable, 3 * sizeof(function))) {
+        server_request_drop(request); return;
+    }
     memcpy(&function, (void *)(uintptr_t)(vtable + slot * 4), sizeof(function));
     uint32_t arguments[] = {object, guest, (uint32_t)value};
     compat_runtime32_call(function, arguments, 3);
@@ -115,23 +143,38 @@ static int invoke_server_method(const struct steam_proxy *proxy, unsigned slot,
         request->vtable = server_response_vtable;
         request->owner = proxy->host;
         request->response = args[slot == 1 ? 2 : 4];
+        if (request->response) {
+            uint32_t vtable;
+            if (!server_guest_range(request->response, sizeof(vtable))) {
+                free(request); *result = 0; return 1;
+            }
+            memcpy(&vtable, (void *)(uintptr_t)request->response, sizeof(vtable));
+            if (!server_guest_range(vtable, 3 * sizeof(uint32_t))) {
+                free(request); *result = 0; return 1;
+            }
+        }
         if (slot != 1 && args[3]) {
             uint32_t records = 0;
-            if (args[2]) memcpy(&records, (void *)(uintptr_t)args[2], sizeof(records));
-            if (!records || args[3] > 65536) {
+            if (args[3] > 65536 || !server_guest_range(args[2], sizeof(records))) {
                 fprintf(stderr, "compat32: invalid Steam server-list filter array\n");
+                free(request); *result = 0; return 1;
+            }
+            memcpy(&records, (void *)(uintptr_t)args[2], sizeof(records));
+            size_t size = (size_t)args[3] * 512;
+            if (!server_guest_range(records, size)) {
+                fprintf(stderr, "compat32: Steam server-list filters exceed the guest address space\n");
                 free(request); *result = 0; return 1;
             }
             /* Valve's ** parameter points to ONE pointer cell containing a
                contiguous array of {char key[256], char value[256]} records.
                Verified in L4D2 serverbrowser StartRefresh at original 0x5d03.
                Retain both widened cell and record copy until ReleaseRequest. */
-            size_t size = (size_t)args[3] * 512;
             request->filters = request->filter_records = malloc(size);
             if (!request->filters) { free(request); *result = 0; return 1; }
             memcpy(request->filters, (void *)(uintptr_t)records, size);
         }
         request->references = 2; /* registry plus this native call */
+        request->native_calls = 1;
         request->active = request->creating = true;
         pthread_mutex_lock(&server_lock);
         if (next_server_request == 0xf9700000) {
@@ -156,11 +199,11 @@ static int invoke_server_method(const struct steam_proxy *proxy, unsigned slot,
             abort(); /* Do not free an adapter still owned by an unknown request. */
         }
         request->creating = false;
-        if (host && request->active) request->host = host;
-        else server_request_retire(request);
+        if (host) request->host = host;
+        if (!host || !request->active) server_request_retire(request);
         *result = request->active ? request->guest : 0;
         pthread_mutex_unlock(&server_lock);
-        server_request_drop(request);
+        server_request_finish(request, true);
         return 1;
     }
     /* List records and direct Ping/Players/Rules callback interfaces remain
@@ -172,6 +215,11 @@ static int invoke_server_method(const struct steam_proxy *proxy, unsigned slot,
         fprintf(stderr, "compat32: rejected unknown or released Steam server-list handle 0x%08x\n", guest);
         *result = 0; return 1;
     }
+    if (slot == 6 && request) {
+        *result = 0;
+        server_request_finish(request, false);
+        return 1;
+    }
     void *host = request ? request->host : NULL;
     if (slot == 10) *result = ((bool (*)(void *, void *))function)(proxy->host, host);
     else if (slot == 11) *result = (uint32_t)((int (*)(void *, void *))function)(proxy->host, host);
@@ -180,9 +228,9 @@ static int invoke_server_method(const struct steam_proxy *proxy, unsigned slot,
         else ((void (*)(void *, void *))function)(proxy->host, host);
         *result = 0;
     }
-    /* ReleaseRequest cancels pending callbacks. Keep the adapter alive until
-       native release returns, including a release nested in a guest callback. */
-    server_request_drop(request);
+    /* Retirement suppresses further guest callbacks immediately. Native
+       release waits for prior query/control calls to finish without blocking. */
+    server_request_finish(request, true);
     return 1;
 }
 
