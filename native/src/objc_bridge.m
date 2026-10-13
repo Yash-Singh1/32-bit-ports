@@ -5475,6 +5475,8 @@ static struct mipmap_repair_entry *mipmap_repair_entry_for(
 
 static void forget_mipmap_repairs(GLsizei count, const GLuint *textures)
 {
+    /* Source does not populate this repair table. */
+    if (lp32_profile_is_source()) return;
     if (count <= 0 || !textures) return;
     CGLContextObj context = CGLGetCurrentContext();
     CGLShareGroupObj share_group = context_share_group(context);
@@ -5666,6 +5668,9 @@ static void note_texture_level_change(void)
 static void repair_mipmap_range_for_parameter(GLenum upload_target,
                                               GLenum parameter, GLint value)
 {
+    /* Match the repair's Source exclusion before querying the driver or
+       consulting a cache which Source never populates. */
+    if (lp32_profile_is_source()) return;
     GLenum target = canonical_mipmap_target(upload_target);
     if (!target) return;
     GLint texture = 0;
