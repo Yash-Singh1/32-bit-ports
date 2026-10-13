@@ -5,6 +5,7 @@
 #include <string.h>
 #include <dlfcn.h>
 #include <unistd.h>
+#include <stdio.h>
 
 extern int32_t FSPathMakeRef(const uint8_t *, void *, uint8_t *);
 extern int32_t FSGetCatalogInfo(const void *, uint32_t, void *, void *, void *, void *);
@@ -92,8 +93,13 @@ int check_quicktime(void)
     if (!media || !*media) return 0;
     if (EnterMovies() || open_file(media,&file)) return -964;
     struct { uint32_t value, guard; } movie = {0,0x87654321};
-    if (NewMovieFromFile(&movie.value,file,0,0,1,0) || !movie.value ||
-        movie.guard != 0x87654321 || CloseMovieFile(file)) return -965;
+    int16_t created = NewMovieFromFile(&movie.value,file,0,0,1,0);
+    if (created) {
+        printf("QuickTime fixture NewMovieFromFile status=%d lastError=%d file=%d\n",
+                created,GetMoviesError(),file);
+        return -965;
+    }
+    if (!movie.value || movie.guard != 0x87654321 || CloseMovieFile(file)) return -975;
     if (GetMovieTimeScale(movie.value) <= 0 || GetMovieDuration(movie.value) <= 0) return -966;
     GetMovieNaturalBoundsRect(movie.value,rect);
     int width = rect[3] - rect[1], height = rect[2] - rect[0];
