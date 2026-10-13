@@ -51,6 +51,17 @@ int LauncherMain(void) {
             for (unsigned j = 0; j < 10; ++j) if (mv.value.values[j] != (float)j + 0.25f) return -6;
         }
     }
+    void *timeline = create("STEAMTIMELINE_INTERFACE_V001", 0);
+    if (!timeline) return -22;
+    typedef void (*timeline_state_fn)(void *, const char *, float);
+    typedef void (*timeline_clear_fn)(void *, float);
+    typedef void (*timeline_event_fn)(void *, const char *, const char *, const char *, unsigned, float, float, int);
+    typedef void (*timeline_mode_fn)(void *, int);
+    METHOD(timeline, 0, timeline_state_fn)(timeline, "fixture state", -1.25f);
+    METHOD(timeline, 1, timeline_clear_fn)(timeline, 0.5f);
+    METHOD(timeline, 2, timeline_event_fn)(timeline, "steam_death", "fixture title", "fixture description",
+                                         1000, -3.25f, 20.5f, 3);
+    METHOD(timeline, 3, timeline_mode_fn)(timeline, 2);
     input = create("SteamInput006", 0);
     void *input5 = create("SteamInput005", 0);
     METHOD(input, 8, event_fn)(input, callback);

@@ -237,6 +237,17 @@ methods += [
     ("IsMessageAvailable", "b", "p"),
     ("RetrieveMessage", "i", "ppip"),
 ]
+# L4D2's client uses this later public interface, absent from SDK 1.53a.
+# Valve's exact V001 declaration is src/public/steam/isteamtimeline.h in
+# source-sdk-2013 commit 0759e2e8e179d5352d81d0d4aaded72c1704b7a9.
+# Append it so the existing generated method ordinals remain stable.
+interfaces.append(("STEAMTIMELINE_INTERFACE_V001", len(methods), 4))
+methods += [
+    ("SetTimelineStateDescription", "v", "pf"),
+    ("ClearTimelineStateDescription", "v", "f"),
+    ("AddTimelineEvent", "v", "pppiffi"),
+    ("SetTimelineGameMode", "v", "i"),
+]
 out = [
     "/* Generated ABI descriptions; see tools/generate_steam_abi.py. */",
     "static const struct steam_method steam_methods[] = {",

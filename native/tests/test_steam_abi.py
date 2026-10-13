@@ -40,6 +40,11 @@ with tempfile.TemporaryDirectory(prefix="lp32-steam-abi-") as directory:
     generated = (root / "abi.inc").read_text()
     for name, _, expected in params:
         assert f'{{"{name}", \'b\', "{expected}"}}' in generated, (name, generated)
+    timeline = [("SetTimelineStateDescription", "pf"), ("ClearTimelineStateDescription", "f"),
+                ("AddTimelineEvent", "pppiffi"), ("SetTimelineGameMode", "i")]
+    for name, arguments in timeline:
+        assert f'{{"{name}", \'v\', "{arguments}"}}' in generated, (name, generated)
+    assert '"STEAMTIMELINE_INTERFACE_V001"' in generated
 
     records = [("GetDigitalActionData", "InputDigitalActionData_t", "D"),
                ("GetAnalogActionData", "InputAnalogActionData_t", "A"),
@@ -64,4 +69,4 @@ with tempfile.TemporaryDirectory(prefix="lp32-steam-abi-") as directory:
     mismatch = subprocess.run(command, capture_output=True, text=True)
     assert mismatch.returncode != 0 and "SDK version mismatch" in mismatch.stderr, mismatch
     assert (root / "abi.inc").read_text() == generated
-print("Steam ABI generation: PASS (pointer depth, string outputs, enums, packed returns, legacy ordinals, SDK version validation)")
+print("Steam ABI generation: PASS (pointer depth, string outputs, enums, packed returns, legacy ordinals, Timeline001, SDK version validation)")

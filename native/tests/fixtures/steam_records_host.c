@@ -8,8 +8,26 @@
 struct object { void **vtable; };
 static void *input6_table[47], *input5_table[47], *controller_table[33];
 static void *storage_table[59], *network_table[22], *party_table[12], *server_table[44];
+static void *timeline_table[4];
 static struct object input6 = {input6_table}, input5 = {input5_table}, controller = {controller_table};
 static struct object storage = {storage_table}, network = {network_table}, party = {party_table}, server = {server_table};
+static struct object timeline = {timeline_table};
+static unsigned timeline_calls;
+static void timeline_state(void *self, const char *description, float offset) {
+    if (self != &timeline || strcmp(description, "fixture state") || offset != -1.25f || timeline_calls++ != 0) abort();
+}
+static void timeline_clear(void *self, float offset) {
+    if (self != &timeline || offset != 0.5f || timeline_calls++ != 1) abort();
+}
+static void timeline_event(void *self, const char *icon, const char *title, const char *description,
+                           unsigned priority, float offset, float duration, int clip) {
+    if (self != &timeline || strcmp(icon, "steam_death") || strcmp(title, "fixture title") ||
+        strcmp(description, "fixture description") || priority != 1000 || offset != -3.25f ||
+        duration != 20.5f || clip != 3 || timeline_calls++ != 2) abort();
+}
+static void timeline_mode(void *self, int mode) {
+    if (self != &timeline || mode != 2 || timeline_calls++ != 3) abort();
+}
 static void check(void *self, uint64_t device) {
     if ((self != &input5 && self != &input6 && self != &controller) || device != DEVICE) abort();
 }
@@ -94,6 +112,8 @@ void *CreateInterface(const char *version, int *status) {
     storage_table[26] = details; storage_table[37] = tags;
     network_table[8] = listen_socket; network_table[10] = connection;
     party_table[11] = location; server_table[33] = public_ip;
+    timeline_table[0] = timeline_state; timeline_table[1] = timeline_clear;
+    timeline_table[2] = timeline_event; timeline_table[3] = timeline_mode;
     if (status) *status = 0;
     if (!strcmp(version, "SteamInput006")) return &input6;
     if (!strcmp(version, "SteamInput005")) return &input5;
@@ -102,5 +122,6 @@ void *CreateInterface(const char *version, int *status) {
     if (!strcmp(version, "SteamNetworking006")) return &network;
     if (!strcmp(version, "SteamParties002")) return &party;
     if (!strcmp(version, "SteamGameServer014")) return &server;
+    if (!strcmp(version, "STEAMTIMELINE_INTERFACE_V001")) return &timeline;
     abort();
 }
