@@ -44,7 +44,7 @@ exports:
       _CGDisplayHideCursor, _CGDisplayShowCursor, _CGCursorIsVisible,
       _CFStringGetBytes, _CFCharacterSetGetPredefined, _CFCharacterSetIsLongCharacterMember, _UpTime, _AbsoluteToNanoseconds, _NanosecondsToAbsolute,
       ___divdi3, ___moddi3, _setjmp, __setjmp, _sigsetjmp, _longjmp,
-      __longjmp, _siglongjmp, _sigprocmask, _sigprocmask$UNIX2003, _memcpy, ___memset_chk,
+      __longjmp, _siglongjmp, _sigprocmask, _sigprocmask$UNIX2003, _memcpy, ___memset_chk, ___bzero,
       _pthread_create, _pthread_create_suspended_np, _pthread_self, _pthread_mach_thread_np, _thread_suspend, _thread_resume, _pthread_join, _pthread_join$UNIX2003, _usleep,
       _usleep$UNIX2003, _GetCurrentProcess, _AudioObjectGetPropertyData, _AudioQueueNewOutput, _AudioQueueAddPropertyListener, _AudioQueueAllocateBuffer, _AudioQueueSetParameter, _AudioQueueGetParameter,
       _AudioQueueEnqueueBuffer, _AudioQueueStart, _AudioQueueStop, _AudioQueueRemovePropertyListener, _AudioQueueFreeBuffer, _AudioQueueDispose,
