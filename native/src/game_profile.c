@@ -271,15 +271,23 @@ static const struct lp32_game_profile portal2_profile = {
     .source_game_directory = "portal2",
 };
 
-/* Binary fingerprint and ABI choices are populated after auditing the Mac depot. */
+/* Steam Mac depot 553: hl2_osx UUID 45DE3007-ADDB-36ED-BE1C-F1FF3383D658.
+   _main is exported at 0x1e00. libtier0 passes allocated thread contexts directly;
+   launcher's objc_msgSend_stret callers compensate the callee's four-byte pop. */
 static const struct lp32_game_profile l4d2_profile = {
     .title = LP32_TITLE_L4D2,
     .name = "L4D2",
     .display_name = "Left 4 Dead 2",
     .log_directory = "L4D2Compat",
     .image_file = "L4D2.image",
+    .entry_eip = 0x00001d90,
+    .image_end = 0x00004000,
+    .main_address = 0x00001e00,
+    .thread_argument_is_direct = 1,
+    .callee_pops_struct_return = 1,
     .steam_app_id = 550,
     .source_data_directory = "L4D2",
+    .source_executable = "hl2_osx",
     .source_game_directory = "left4dead2",
 };
 
@@ -321,6 +329,7 @@ const struct lp32_game_profile *lp32_profile_named(const char *name)
     }
     /* Accept the friendlier spellings used on the command line. */
     if (strcasecmp(name, "pirates") == 0) return &pirates_profile;
+    if (strcasecmp(name, "left4dead2") == 0) return &l4d2_profile;
     if (strcasecmp(name, "clonewars") == 0 || strcasecmp(name, "lsw3") == 0) {
         return &clone_wars_profile;
     }
@@ -368,8 +377,10 @@ uint32_t lp32_profile_main_address(const struct macho_image32 *image)
     return 0;
 }
 
-int lp32_profile_select(const struct macho_image32 *image)
+int lp32_profile_select_hint(const struct macho_image32 *image,
+                             const struct lp32_game_profile *hint)
 {
+    current_profile = &unknown_profile;
     const struct lp32_game_profile *selected = NULL;
     const char *override = getenv("LP32_GAME");
     if (override && override[0]) {
@@ -378,13 +389,19 @@ int lp32_profile_select(const struct macho_image32 *image)
             fprintf(stderr, "game_loader: unknown LP32_GAME profile: %s\n", override);
             return -1;
         }
+    } else if (hint) {
+        selected = hint;
     } else {
         for (size_t index = 0; index < sizeof(known_profiles) / sizeof(known_profiles[0]); ++index) {
             const struct lp32_game_profile *candidate = known_profiles[index];
-            if (candidate->entry_eip == image->entry_eip &&
+            if (candidate->entry_eip && candidate->image_end &&
+                candidate->entry_eip == image->entry_eip &&
                 candidate->image_end == image->max_address) {
+                if (selected) {
+                    fprintf(stderr, "game_loader: ambiguous image; set LP32_GAME or launch its compatibility bundle\n");
+                    return -1;
+                }
                 selected = candidate;
-                break;
             }
         }
     }
@@ -399,4 +416,9 @@ int lp32_profile_select(const struct macho_image32 *image)
     fprintf(stderr, "compat32: title profile %s (%s)\n", selected->name,
             selected->display_name);
     return 0;
+}
+
+int lp32_profile_select(const struct macho_image32 *image)
+{
+    return lp32_profile_select_hint(image, NULL);
 }
