@@ -1068,6 +1068,34 @@ static uint32_t carbon_mouse_position32(const uint32_t *arguments)
     return output;
 }
 
+static OSStatus carbon_window_bounds32(const uint32_t *arguments)
+{
+    uint32_t output = arguments[2];
+    if (!output || (uint64_t)output + 8 > UINT64_C(0x100000000)) return paramErr;
+    NSWindow *window = carbon_window_proxy(arguments[0]);
+    if (!window) return errInvalidWindowRef;
+    if (arguments[1] != kWindowGlobalPortRgn) return unimpErr;
+    NSArray<NSScreen *> *screens = [NSScreen screens];
+    if (![screens count]) return windowManagerInternalErr;
+    /* The QuickDraw window port is the content rectangle, expressed in
+       compatibility global coordinates (top-left of the primary display).
+       Do not multiply by backingScaleFactor: Source subsequently applies
+       its viewport/port-size ratio to handle drawable scaling itself. */
+    NSRect content = [window contentRectForFrameRect:[window frame]];
+    CGFloat primary_top = NSMaxY([[screens objectAtIndex:0] frame]);
+    CGRect global = CGRectIntegral(CGRectMake(NSMinX(content), primary_top - NSMaxY(content),
+                                              NSWidth(content), NSHeight(content)));
+    CGFloat edges[] = {CGRectGetMinY(global), CGRectGetMinX(global),
+                       CGRectGetMaxY(global), CGRectGetMaxX(global)};
+    int16_t rect[4];
+    for (unsigned i = 0; i < 4; ++i) {
+        if (!isfinite(edges[i]) || edges[i] < INT16_MIN || edges[i] > INT16_MAX) return paramErr;
+        rect[i] = (int16_t)edges[i];
+    }
+    memcpy((void *)(uintptr_t)output, rect, sizeof(rect));
+    return noErr;
+}
+
 static bool carbon_mouse_between(float value, CGFloat before, CGFloat after)
 {
     return isfinite(value) && value >= fmin(before, after) - 0.02 &&
@@ -1120,6 +1148,20 @@ int objc_bridge32_run_hi_mouse_self_test(void)
         NSPoint relative = carbon_window_point(anchor, frame);
         if (titlebar <= 0 || relative.x != 17.25 || fabs(relative.y - (titlebar + 9.5)) > 0.001) goto finished;
 
+        uint32_t bounds_arguments[] = {handles[0], kWindowGlobalPortRgn, storage + 4};
+        if (!objc_bridge32_dispatch("_GetWindowBounds", bounds_arguments, &result) || (int32_t)result != noErr ||
+            guard[0] != 0x88776655 || guard[3] != 0xaabbccdd) goto finished;
+        int16_t *rect = (void *)(uintptr_t)(storage + 4);
+        NSArray<NSScreen *> *screens = [NSScreen screens];
+        CGFloat primary_top = NSMaxY([[screens objectAtIndex:0] frame]);
+        if (rect[0] != primary_top - NSMaxY(content) || rect[1] != NSMinX(content) ||
+            rect[2] != primary_top - NSMinY(content) || rect[3] != NSMaxX(content) ||
+            rect[3] - rect[1] != 320 || rect[2] - rect[0] != 240 ||
+            rect[2] - rect[0] >= NSHeight(frame)) goto finished;
+        /* Source's independent viewport scale should be 2x for 640x480,
+           rather than using the titlebar-inclusive height or Retina pixels. */
+        if (640.0 / (rect[3] - rect[1]) != 2 || 480.0 / (rect[2] - rect[0]) != 2) goto finished;
+
         uint32_t wrong_class = proxy_for_object(@"not a window");
         uint32_t invalid[][3] = {
             {0, 0, storage + 4}, {99, handles[0], storage + 4},
@@ -1143,7 +1185,20 @@ int objc_bridge32_run_hi_mouse_self_test(void)
             if (!objc_bridge32_dispatch("_HIGetMousePosition", invalid_outputs[i], &result) || result ||
                 point[0] != 1234 || point[1] != -5678 || guard[0] != 0x88776655 || guard[3] != 0xaabbccdd) goto finished;
         }
-        puts("Carbon mouse self-test: PASS (native global/window coordinates, titlebar origin, 8-byte HIPoint, invalid references/spaces/ranges)");
+        uint32_t invalid_bounds[][3] = {
+            {0, kWindowGlobalPortRgn, storage + 4},
+            {UINT32_C(0xfffffff0), kWindowGlobalPortRgn, storage + 4},
+            {wrong_class, kWindowGlobalPortRgn, storage + 4},
+            {handles[0], kWindowStructureRgn, storage + 4},
+            {handles[0], kWindowGlobalPortRgn, 0},
+            {handles[0], kWindowGlobalPortRgn, UINT32_C(0xfffffffb)}
+        };
+        for (unsigned i = 0; i < sizeof(invalid_bounds) / sizeof(invalid_bounds[0]); ++i) {
+            OSStatus expected = i < 3 ? errInvalidWindowRef : i == 3 ? unimpErr : paramErr;
+            if (!objc_bridge32_dispatch("_GetWindowBounds", invalid_bounds[i], &result) || (int32_t)result != expected ||
+                point[0] != 1234 || point[1] != -5678 || guard[0] != 0x88776655 || guard[3] != 0xaabbccdd) goto finished;
+        }
+        puts("Carbon mouse self-test: PASS (native global/window coordinates, titlebar/port origins, 8-byte HIPoint/Rect, invalid references/spaces/ranges)");
         status = 0;
 finished:
         if (status) fputs("compat32: Carbon mouse coordinate/ABI self-test failed\n", stderr);
@@ -6409,6 +6464,11 @@ static int objc_bridge32_dispatch_body(const char *import_name,
     if (LP32_NAME_IS(import_name, import_length, "_HIGetMousePosition") ||
         LP32_NAME_IS(import_name, import_length, "HIGetMousePosition")) {
         *result = carbon_mouse_position32(arguments);
+        return 1;
+    }
+    if (LP32_NAME_IS(import_name, import_length, "_GetWindowBounds") ||
+        LP32_NAME_IS(import_name, import_length, "GetWindowBounds")) {
+        *result = (uint32_t)carbon_window_bounds32(arguments);
         return 1;
     }
     if (LP32_NAME_IS(import_name, import_length, "_CGMainDisplayID")) {
