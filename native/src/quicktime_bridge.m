@@ -6,6 +6,7 @@
 #include <math.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +19,7 @@
 enum { PARAM_ERROR = -50, MEMORY_ERROR = -108, FILE_ERROR = -43,
        MOVIE_ERROR = -2010, INVALID_TIME = -2015, MAX_MOVIES = 32,
        MAX_SAMPLE_TIMES = 4000000 };
+struct seek_state { atomic_uint references; atomic_bool done, succeeded; };
 struct movie {
     uint32_t handle, world, audio_context;
     int width, height;
@@ -28,6 +30,7 @@ struct movie {
     AVPlayerItem *item;
     AVPlayerItemVideoOutput *output;
     CVPixelBufferRef last_pixels;
+    struct seek_state *seek;
     bool logged_frame;
     struct movie *next;
 };
@@ -35,7 +38,7 @@ struct audio_context { uint32_t handle; struct audio_context *next; };
 static struct movie *movies;
 static struct audio_context *audio_contexts;
 static unsigned movie_count;
-static uint32_t next_movie = 0xffc00001u, next_audio = 0xffd00001u;
+static uint32_t next_movie = 0xf9300001u, next_audio = 0xf9400001u;
 /* No guest callbacks or main-queue sync hops occur under this lock. QuickDraw
    support never takes the movie lock, so movie -> world is the sole order. */
 static pthread_mutex_t movies_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -62,12 +65,18 @@ static bool find_audio(uint32_t handle)
     return false;
 }
 
+static void release_seek(struct seek_state *seek)
+{
+    if (seek && atomic_fetch_sub(&seek->references, 1) == 1) free(seek);
+}
+
 static void destroy_movie(struct movie *m)
 {
     [m->player pause];
     [m->player replaceCurrentItemWithPlayerItem:nil];
     if (m->item && m->output) [m->item removeOutput:m->output];
     if (m->last_pixels) CVPixelBufferRelease(m->last_pixels);
+    release_seek(m->seek);
     [m->output release];
     [m->item release];
     [m->player release];
@@ -198,7 +207,7 @@ static int new_movie(const uint32_t *a)
     int status = load_movie(path, &m);
     if (!status) {
         pthread_mutex_lock(&movies_lock);
-        if (movie_count == MAX_MOVIES || next_movie == 0xffd00000u) status = MEMORY_ERROR;
+        if (movie_count == MAX_MOVIES || next_movie == 0xf9400000u) status = MEMORY_ERROR;
         else {
             m->handle = next_movie++;
             m->next = movies; movies = m; ++movie_count;
@@ -217,6 +226,12 @@ static int new_movie(const uint32_t *a)
 
 static int copy_frame(struct movie *m)
 {
+    if (m->seek) {
+        if (!atomic_load(&m->seek->done)) return 0;
+        bool succeeded = atomic_load(&m->seek->succeeded);
+        release_seek(m->seek); m->seek = NULL;
+        if (!succeeded) return MOVIE_ERROR;
+    }
     if (m->item.status == AVPlayerItemStatusFailed || m->player.status == AVPlayerStatusFailed)
         return MOVIE_ERROR;
     if (!m->world) return 0;
@@ -319,7 +334,7 @@ int quicktime_bridge32_dispatch(const char *name, const uint32_t *a, uint64_t *r
                     if (a[0] || a[1] || a[2]) status = PARAM_ERROR;
                     else {
                         struct audio_context *c = calloc(1, sizeof(*c));
-                        if (!c || next_audio == 0xffe00000u) { free(c); status = MEMORY_ERROR; }
+                        if (!c || next_audio == 0xf9500000u) { free(c); status = MEMORY_ERROR; }
                         else {
                             c->handle = next_audio++; c->next = audio_contexts;
                             audio_contexts = c; *out = c->handle;
@@ -366,9 +381,25 @@ int quicktime_bridge32_dispatch(const char *name, const uint32_t *a, uint64_t *r
                     int32_t tick = (int32_t)a[1];
                     if (tick < 0 || tick > m->duration) status = INVALID_TIME;
                     else {
-                        if (m->last_pixels) { CVPixelBufferRelease(m->last_pixels); m->last_pixels = NULL; }
-                        [m->player seekToTime:CMTimeMake(tick, m->time_scale)
-                            toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];
+                        struct seek_state *seek = calloc(1, sizeof(*seek));
+                        if (!seek) status = MEMORY_ERROR;
+                        else {
+                            atomic_init(&seek->references, 2);
+                            atomic_init(&seek->done, false);
+                            atomic_init(&seek->succeeded, false);
+                            release_seek(m->seek); m->seek = seek;
+                            if (m->last_pixels) { CVPixelBufferRelease(m->last_pixels); m->last_pixels = NULL; }
+                            /* Until completion, video output may still offer
+                               a pre-seek frame. Do not copy it into the world.
+                               Callback state outlives movie disposal. */
+                            [m->player seekToTime:CMTimeMake(tick, m->time_scale)
+                                toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero
+                                completionHandler:^(BOOL finished) {
+                                    atomic_store(&seek->succeeded, finished);
+                                    atomic_store(&seek->done, true);
+                                    release_seek(seek);
+                                }];
+                        }
                     }
                 } else if (!strcmp(name, "UpdateMovie") || !strcmp(name, "MoviesTask")) status = copy_frame(m);
             }
