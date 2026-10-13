@@ -44,12 +44,15 @@
 #include <unistd.h>
 #include <mach/mach_time.h>
 
-void objc_bridge32_show_steam_required(void)
+void objc_bridge32_show_steam_required(const char *profile_name)
 {
     @autoreleasepool {
-        NSString *title = @"Portal 2 couldn’t connect to Steam";
-        NSString *message = @"Open Steam and sign in to an account that owns Portal 2, then launch the game again.\n\n"
-            @"If Steam is already open, quit and reopen it before retrying.";
+        const struct lp32_game_profile *profile = lp32_profile_named(profile_name);
+        NSString *game = profile ? [NSString stringWithUTF8String:profile->display_name] : @"The game";
+        NSString *title = [NSString stringWithFormat:@"%@ couldn’t connect to Steam", game];
+        NSString *message = [NSString stringWithFormat:
+            @"Open Steam and sign in to an account that owns %@, then launch the game again.\n\n"
+            @"If Steam is already open, quit and reopen it before retrying.", game];
         fprintf(stderr, "%s\n%s\n", title.UTF8String, message.UTF8String);
         /* Explicit opt-out for headless regression runs; normal launches
            always show the error, including launches from Terminal. */
@@ -71,7 +74,8 @@ void objc_bridge32_show_steam_required(void)
             ![[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"steam://open/main"]]) {
             NSAlert *failed = [[NSAlert alloc] init];
             failed.messageText = @"Steam couldn’t be opened";
-            failed.informativeText = @"Open Steam from Applications and sign in, then launch Portal 2 again.";
+            failed.informativeText = [NSString stringWithFormat:
+                @"Open Steam from Applications and sign in, then launch %@ again.", game];
             [failed addButtonWithTitle:@"OK"];
             [failed runModal];
             [failed release];
@@ -84,6 +88,7 @@ struct steam_startup_probe {
     bool (*running)(void);
     bool (*initialize)(void);
     void (*shutdown)(void);
+    const char *display_name;
     double deadline;
 };
 static bool startup_steam_running(void *opaque)
@@ -106,8 +111,8 @@ static void startup_steam_shutdown(void *opaque)
 }
 static bool startup_steam_open(void *opaque)
 {
-    (void)opaque;
-    fprintf(stderr, "compat32: opening Steam before launching Portal 2\n");
+    struct steam_startup_probe *probe = opaque;
+    fprintf(stderr, "compat32: opening Steam before launching %s\n", probe->display_name);
     if (getenv("LP32_HEADLESS_ERRORS")) return false;
     return [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"steam://open/main"]];
 }
@@ -120,15 +125,18 @@ static bool startup_steam_wait(void *opaque)
     }
     return true;
 }
-int objc_bridge32_prepare_steam(const char *game_root)
+int objc_bridge32_prepare_steam(const char *game_root, const char *profile_name)
 {
     @autoreleasepool {
-        setenv("SteamAppId", "620", 1);
-        setenv("SteamGameId", "620", 1);
-        struct steam_startup_probe probe = {0};
+        const struct lp32_game_profile *profile = lp32_profile_named(profile_name);
+        if (!game_root || !profile || !steam_startup_set_app_id(profile->steam_app_id)) {
+            fprintf(stderr, "compat32: invalid Steam startup profile or app identity\n");
+            return EXIT_FAILURE;
+        }
+        struct steam_startup_probe probe = {.display_name = profile->display_name};
         void *library = NULL;
-        /* The supplied Steam API is universal. Probe its native slice in
-           this isolated helper; the game still initializes its own i386 API. */
+        /* Probe a native slice when supplied, in this isolated helper.
+           The game still initializes and authenticates its own i386 API. */
         for (NSString *directory in @[@"bin/osx32", @"bin"]) {
             NSString *path = [NSString stringWithFormat:@"%s/%@/libsteam_api.dylib", game_root, directory];
             library = dlopen(path.fileSystemRepresentation, RTLD_NOW | RTLD_LOCAL);
@@ -152,7 +160,7 @@ int objc_bridge32_prepare_steam(const char *game_root)
         }
         fprintf(stderr, "compat32: Steam startup %s\n",
             result == STEAM_STARTUP_OPEN_FAILED ? "could not open the client" : "timed out waiting for the client");
-        objc_bridge32_show_steam_required();
+        objc_bridge32_show_steam_required(profile_name);
         return EXIT_FAILURE;
     }
 }
@@ -1854,7 +1862,7 @@ static bool invoke_simple_message(id receiver, const char *selector_name,
             if (getenv("LP32_TRACE_EVENTS") && [value isKindOfClass:[NSEvent class]])
                 fprintf(stderr, "compat32: delivered event %p type=%lu via=%s\n", (void *)value,
                     (unsigned long)[(NSEvent *)value type], selector_name);
-            if (lp32_profile()->title == LP32_TITLE_PORTAL2 && receiver == [NSDate class] &&
+            if (lp32_profile_is_source() && receiver == [NSDate class] &&
                 (!strcmp(selector_name, "date") || !strncmp(selector_name, "dateWith", 8)))
                 *guest_result = proxy_for_autoreleased_value(value);
             else *guest_result = proxy_for_returned_object(receiver, value);
@@ -4070,7 +4078,7 @@ static bool portal_buffer_cache_enabled(void)
 {
     static int disabled = -1;
     if (disabled < 0) disabled = getenv("LP32_NO_BUFFER_CACHE") != NULL;
-    return lp32_profile()->title == LP32_TITLE_PORTAL2 && !disabled;
+    return lp32_profile_is_source() && !disabled;
 }
 
 static int buffer_target_index(GLenum target)
@@ -4222,7 +4230,7 @@ static void upload_mapped_buffer_range(GLenum target, GLintptr offset,
     dispatch_once(&once, ^{
         native_copy = getenv("LP32_NO_MAPPED_UPLOAD") == NULL;
     });
-    if (native_copy && lp32_profile()->title == LP32_TITLE_PORTAL2 && size > 0) {
+    if (native_copy && lp32_profile_is_source() && size > 0) {
         void *mapped = glMapBuffer(target, GL_WRITE_ONLY);
         if (mapped) {
             memcpy((unsigned char *)mapped + offset, data, (size_t)size);
@@ -5312,7 +5320,7 @@ static GLenum canonical_mipmap_target(GLenum target)
 
 static void repair_bound_texture_mipmap_range(GLenum upload_target)
 {
-    if (lp32_profile()->title == LP32_TITLE_PORTAL2) return;
+    if (lp32_profile_is_source()) return;
     GLenum target = canonical_mipmap_target(upload_target);
     static int repair_disabled = -1;
     if (repair_disabled < 0) {
@@ -6206,7 +6214,7 @@ lp32_fast_import_fn objc_bridge32_fast_import(const char *import_name)
         if (!strncmp(query, "_gl", 3)) ++query;
         if ((!strncmp(candidate, "glUniform", 9) ||
              !strncmp(candidate, "glUseProgram", 12)) &&
-            (lp32_profile()->title != LP32_TITLE_PORTAL2 ||
+            (!lp32_profile_is_source() ||
              getenv("LP32_NO_FAST_GLSL"))) continue;
         if (strcmp(query, candidate) == 0) {
             return table[index].handler;
@@ -6344,7 +6352,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         }
         *result = 0; return 1;
     }
-    if (lp32_profile()->title == LP32_TITLE_PORTAL2 &&
+    if (lp32_profile_is_source() &&
         (LP32_NAME_IS(import_name, import_length, "_ShowWindow") ||
          LP32_NAME_IS(import_name, import_length, "_CollapseWindow") ||
          LP32_NAME_IS(import_name, import_length, "_SetUserFocusWindow") ||
@@ -6482,7 +6490,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
     if (LP32_NAME_IS(import_name, import_length, "_CFStringCreateWithCString") ||
         LP32_NAME_IS(import_name, import_length, "_CFStringCreateWithCStringNoCopy")) {
         CFStringRef string = CFStringCreateWithCString(NULL, (const char *)(uintptr_t)arguments[1], arguments[2]);
-        *result = lp32_profile()->title == LP32_TITLE_PORTAL2 ?
+        *result = lp32_profile_is_source() ?
             proxy_for_owned_value((id)string) : proxy_for_object((id)string);
         if (string) CFRelease(string);
         return 1;
@@ -6693,7 +6701,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         *result = kCGErrorSuccess;
         return 1;
     }
-    if (lp32_profile()->title == LP32_TITLE_PORTAL2 &&
+    if (lp32_profile_is_source() &&
         (LP32_NAME_IS(import_name, import_length, "_CGDisplayHideCursor") ||
          LP32_NAME_IS(import_name, import_length, "_CGDisplayShowCursor"))) {
         /* Source repeats hide/show until its visibility query changes. Keep
@@ -6810,7 +6818,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         // can report no active displays while AppKit still exposes connected
         // screens (for example, while displays sleep). Keep those available
         // for this windowed renderer instead of handing Source zero adapters.
-        if (!*result && lp32_profile()->title == LP32_TITLE_PORTAL2) {
+        if (!*result && lp32_profile_is_source()) {
             uint32_t active_count = 0;
             if (CGGetActiveDisplayList(0, NULL, &active_count) == kCGErrorSuccess && !active_count) {
                 for (NSScreen *screen in [NSScreen screens]) {
@@ -6825,7 +6833,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         return 1;
     }
     if (LP32_NAME_IS(import_name, import_length, "_CGCursorIsVisible")) {
-        if (lp32_profile()->title == LP32_TITLE_PORTAL2) {
+        if (lp32_profile_is_source()) {
             pthread_mutex_lock(&portal_cursor_lock);
             *result = portal_cursor.hide_count == 0;
             pthread_mutex_unlock(&portal_cursor_lock);
@@ -6849,11 +6857,11 @@ static int objc_bridge32_dispatch_body(const char *import_name,
     }
     if (LP32_NAME_IS(import_name, import_length, "_CGWarpMouseCursorPosition")) {
         const float *point = (const void *)arguments;
-        if (lp32_profile()->title == LP32_TITLE_PORTAL2) {
+        if (lp32_profile_is_source()) {
             pthread_mutex_lock(&portal_cursor_lock);
             if (!portal_cursor.focused && ++portal_background_warps == 1 &&
                 getenv("LP32_TRACE_DISPLAY"))
-                fprintf(stderr, "compat32: suppressing background Portal cursor warps\n");
+                fprintf(stderr, "compat32: suppressing background Source cursor warps\n");
             *result = lp32_cursor_warp(&portal_cursor, &portal_cursor_host, point[0], point[1]);
             pthread_mutex_unlock(&portal_cursor_lock);
             return 1;
@@ -6861,7 +6869,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         *result = CGWarpMouseCursorPosition(CGPointMake(point[0], point[1])); return 1;
     }
     if (LP32_NAME_IS(import_name, import_length, "_CGAssociateMouseAndMouseCursorPosition")) {
-        if (lp32_profile()->title == LP32_TITLE_PORTAL2) {
+        if (lp32_profile_is_source()) {
             pthread_mutex_lock(&portal_cursor_lock);
             *result = lp32_cursor_capture(&portal_cursor, &portal_cursor_host, !arguments[0]);
             if (getenv("LP32_TRACE_DISPLAY"))
@@ -7994,7 +8002,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         *result = 0; return 1;
     }
     if (LP32_NAME_IS(import_name, import_length, "_IORegistryEntrySearchCFProperty")) {
-        if (lp32_profile()->title == LP32_TITLE_PORTAL2) {
+        if (lp32_profile_is_source()) {
             CFTypeRef property = IORegistryEntrySearchCFProperty(arguments[0], (const char *)(uintptr_t)arguments[1],
                 (CFStringRef)object_for_argument(arguments[2]), NULL, arguments[4]);
             *result = proxy_for_object((id)property);
@@ -8461,7 +8469,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         CFIndex length = (int32_t)arguments[2];
         CFStringRef string = CFStringCreateWithBytes(NULL, bytes, length,
                                                      arguments[3], false);
-        *result = lp32_profile()->title == LP32_TITLE_PORTAL2 ?
+        *result = lp32_profile_is_source() ?
             proxy_for_owned_value((id)string) : proxy_for_object((id)string);
         if (string) CFRelease(string);
         return 1;
@@ -8798,7 +8806,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
     }
 #pragma clang diagnostic pop
     if (LP32_NAME_IS(import_name, import_length, "_CFRunLoopGetCurrent")) {
-        if (lp32_profile()->title == LP32_TITLE_PORTAL2) {
+        if (lp32_profile_is_source()) {
             *result = proxy_for_object((id)CFRunLoopGetCurrent()); return 1;
         }
         /* A host-thread token is sufficient because Add/Remove operate on
@@ -9072,7 +9080,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
              receiver == [NSAutoreleasePool class] || [receiver isKindOfClass:[LP32GuestAutoreleasePool class]]))
             fprintf(stderr, "compat32: date/pool %s receiver=%s\n", selector_name,
                 receiver ? class_getName(object_getClass(receiver)) : "nil");
-        if (lp32_profile()->title == LP32_TITLE_PORTAL2 && selector_name) {
+        if (lp32_profile_is_source() && selector_name) {
             /* A guest pool spans import calls, while each host dispatch has
                its own nested pool. Creating an actual NSAutoreleasePool here
                would let the dispatch pop destroy the guest's pool early. */
@@ -9146,7 +9154,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
                     arguments[0], selector_name ? selector_name : "(null)");
             return 0;
         }
-        if (lp32_profile()->title == LP32_TITLE_PORTAL2 &&
+        if (lp32_profile_is_source() &&
             strcmp(selector_name, "flushBuffer") == 0 &&
             [receiver isKindOfClass:[NSOpenGLContext class]]) {
             portal_flush_buffer(receiver);
@@ -9158,7 +9166,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
             *result = context ? proxy_for_object([NSValue valueWithPointer:context]) : 0;
             return 1;
         }
-        if (lp32_profile()->title == LP32_TITLE_PORTAL2 &&
+        if (lp32_profile_is_source() &&
             strcmp(selector_name, "windowRef") == 0 &&
             [receiver isKindOfClass:[NSWindow class]]) {
             *result = arguments[0];
@@ -9190,7 +9198,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
                                                        styleMask:arguments[6]
                                                          backing:arguments[7]
                                                            defer:arguments[8] != 0];
-            if (lp32_profile()->title == LP32_TITLE_PORTAL2 &&
+            if (lp32_profile_is_source() &&
                 [value isKindOfClass:objc_getClass("AppWindow")])
                 observe_portal_cursor_focus(value);
             *result = proxy_for_object(value);
@@ -9315,7 +9323,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
                     ReleaseEvent(carbon_event);
                 }
             }
-            if (lp32_profile()->title == LP32_TITLE_PORTAL2 && background_test_mode()) {
+            if (lp32_profile_is_source() && background_test_mode()) {
                 /* The benchmark keeps rendering on a secondary display
                    without stealing focus. Source otherwise waits ~50 ms in
                    its inactive event pump, obscuring rendering costs. */
@@ -10378,7 +10386,7 @@ int objc_bridge32_run_gl_texture_self_test(void)
             GLint maximum = -1;
             glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL,
                                 &maximum);
-            if (maximum != (lp32_profile()->title == LP32_TITLE_PORTAL2 ? 6 : 5)) {
+            if (maximum != (lp32_profile_is_source() ? 6 : 5)) {
                 fprintf(stderr,
                         "gl-texture-selftest: incomplete chain was not "
                         "following the title policy: max=%d\n", maximum);
@@ -10425,7 +10433,7 @@ int objc_bridge32_run_gl_texture_self_test(void)
                 }
                 glGetTexParameteriv(GL_TEXTURE_CUBE_MAP,
                                     GL_TEXTURE_MAX_LEVEL, &maximum);
-                if (maximum != (lp32_profile()->title == LP32_TITLE_PORTAL2 ? 6 : 5)) {
+                if (maximum != (lp32_profile_is_source() ? 6 : 5)) {
                     fprintf(stderr,
                             "gl-texture-selftest: incomplete cube chain was "
                             "not following the title policy: max=%d\n", maximum);
@@ -10442,7 +10450,7 @@ int objc_bridge32_run_gl_texture_self_test(void)
                 }
                 glGetTexParameteriv(GL_TEXTURE_CUBE_MAP,
                                     GL_TEXTURE_MAX_LEVEL, &maximum);
-                if (maximum != (lp32_profile()->title == LP32_TITLE_PORTAL2 ? 6 : 5)) {
+                if (maximum != (lp32_profile_is_source() ? 6 : 5)) {
                     fprintf(stderr,
                             "gl-texture-selftest: five-face cube level "
                             "violated the title policy: max=%d\n", maximum);

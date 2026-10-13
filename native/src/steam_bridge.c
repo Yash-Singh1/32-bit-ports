@@ -149,7 +149,7 @@ static bool plain_callback(int id)
 
 uint32_t steam_bridge32_open(const char *path)
 {
-    if (lp32_profile()->title != LP32_TITLE_PORTAL2 || !path || path[0] != '/') return 0;
+    if (!lp32_profile()->steam_app_id || !path || path[0] != '/') return 0;
     const char *base = strrchr(path, '/');
     if (!base || strcmp(base + 1, "steamclient.dylib")) return 0;
     if (!client_library) {
