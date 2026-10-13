@@ -152,6 +152,9 @@ static int load_movie(const char *path, struct movie **out)
     int status = 0;
     CMSampleBufferRef sample;
     while ((sample = [timing copyNextSampleBuffer])) {
+        /* Compressed reader outputs include marker-only buffers with no
+           samples and possibly invalid timestamps. They are not frames. */
+        if (!CMSampleBufferGetNumSamples(sample)) { CFRelease(sample); continue; }
         CMTime pts = CMSampleBufferGetPresentationTimeStamp(sample);
         int64_t tick = CMTIME_IS_NUMERIC(pts) ? CMTimeConvertScale(pts, scale,
             kCMTimeRoundingMethod_RoundHalfAwayFromZero).value : -1;
@@ -303,6 +306,11 @@ int quicktime_bridge32_dispatch(const char *name, const uint32_t *a, uint64_t *r
         if (!strcmp(name, supported[i])) { found = true; break; }
     if (!found) return 0;
     @autoreleasepool {
+        /* The legacy API cooperatively services movie work. AVPlayer's
+           readiness and seek notifications also need a live main run loop.
+           Pump before taking our lock because an event may reenter a bridge. */
+        if (!strcmp(name, "MoviesTask") && [NSThread isMainThread])
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, true);
         *result = 0;
         int status = 0;
         if (!strcmp(name, "GetMoviesError")) {

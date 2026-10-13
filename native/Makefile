@@ -235,6 +235,13 @@ $(BUILD_DIR)/game_loader: src/game_profile.h
 $(BUILD_DIR)/game_loader: src/audio_converter_bridge.c src/audio_converter_bridge.h
 $(BUILD_DIR)/game_loader: src/quicktime_bridge.m src/quicktime_bridge.h src/quicktime_support.c src/quicktime_support.h
 
+.PHONY: test-quicktime-support
+$(BUILD_DIR)/test_quicktime_support: tests/test_quicktime_support.c src/quicktime_support.c src/quicktime_support.h | $(BUILD_DIR)
+	$(CLANG) $(CFLAGS) -Isrc tests/test_quicktime_support.c src/quicktime_support.c -pthread -Wl,-no_pie,-pagezero_size,0x1000,-segaddr,__TEXT,0x100000000 -o $@
+
+test-quicktime-support: $(BUILD_DIR)/test_quicktime_support
+	arch -x86_64 ./$(BUILD_DIR)/test_quicktime_support
+
 .PHONY: test-audio-converter
 $(BUILD_DIR)/test_audio_converter_bridge: tests/test_audio_converter_bridge.c src/audio_converter_bridge.c src/audio_converter_bridge.h | $(BUILD_DIR)
 	$(CLANG) $(CFLAGS) -Isrc tests/test_audio_converter_bridge.c src/audio_converter_bridge.c -framework AudioToolbox -pthread -Wl,-no_pie,-pagezero_size,0x1000,-segaddr,__TEXT,0x100000000 -o $@
