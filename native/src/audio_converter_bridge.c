@@ -27,7 +27,7 @@ struct converter {
 };
 static struct converter *converters;
 static unsigned converter_count;
-static uint32_t next_handle = 0xff900001u;
+static uint32_t next_handle = 0xf9500001u;
 static pthread_mutex_t converters_lock = PTHREAD_MUTEX_INITIALIZER;
 static _Thread_local struct converter *active_callback;
 
@@ -85,7 +85,7 @@ static OSStatus create(const uint32_t *a)
     OSStatus status = AudioConverterNew(&input, &output, &c->host);
     if (!status) {
         pthread_mutex_lock(&converters_lock);
-        if (converter_count >= MAX_CONVERTERS || next_handle == 0xffa00000u) status = ALLOCATION_ERROR;
+        if (converter_count >= MAX_CONVERTERS || next_handle == 0xf9600000u) status = ALLOCATION_ERROR;
         else {
             c->handle = next_handle++;
             c->next = converters; converters = c; ++converter_count;
