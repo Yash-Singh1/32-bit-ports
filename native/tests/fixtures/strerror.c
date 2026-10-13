@@ -6,6 +6,8 @@
 #include <string.h>
 #include <unistd.h>
 
+extern char *legacy_strerror(int) __asm("_strerror");
+
 enum { CASES = 8, THREADS = 8 };
 static const int errors[CASES] = {65, ENOENT, EACCES, 0, -1, INT_MIN, INT_MAX, 123456789};
 static const char *expectations[CASES];
@@ -29,8 +31,9 @@ static int check_message(int index, char **saved)
     if (*saved && (*saved != message || strcmp(*saved, expectations[index]))) return -982;
     *saved = message;
     struct { char text[256]; uint32_t guard; } copy = {{0}, 0x1234abcd};
-    if (strlen(message) >= sizeof(copy.text)) return -983;
-    strcpy(copy.text,message);
+    size_t size = strlen(message) + 1;
+    if (size > sizeof(copy.text)) return -983;
+    for (size_t i = 0; i < size; ++i) copy.text[i] = message[i];
     return copy.guard == 0x1234abcd && !strcmp(copy.text,expectations[index]) ? 0 : -984;
 }
 
@@ -81,5 +84,5 @@ int check_strerror(void)
             if (workers[thread].messages[i] != message) return -989;
         error = check_message((int)i,&message); if (error) return error;
     }
-    return !strcmp(retained,expectations[0]) && strerror(65) == retained ? 0 : -990;
+    return !strcmp(retained,expectations[0]) && legacy_strerror(65) == retained ? 0 : -990;
 }

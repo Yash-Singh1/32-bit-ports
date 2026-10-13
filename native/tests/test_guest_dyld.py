@@ -36,7 +36,7 @@ exports:
     symbols: [
       _NewTimerUPP, _DisposeTimerUPP, _InstallTimeTask, _PrimeTime, _PrimeTimeTask, _RemoveTimeTask,
       _NewSndCallBackUPP, _DisposeSndCallBackUPP, _SndNewChannel, _SndDisposeChannel, _SndDoCommand, _SndDoImmediate, _SndChannelStatus, _OTAtomicAdd32,
-      _wcstoul, _wcstoll, _wcstoull, _wcsdup, _wcspbrk, _wcsspn, _wcscspn, _wcscasecmp, _wcsncasecmp, _atoll, _vswscanf, _iswalnum, _iswalpha, _iswblank, _iswcntrl, _iswdigit, _iswgraph, _iswlower, _iswprint, _iswpunct, _iswspace, _iswupper, _iswxdigit, _towlower, _towupper, _iswctype, _wctype, _towctrans, _wctrans, ___error, _strerror,
+      _wcstoul, _wcstoll, _wcstoull, _wcsdup, _wcspbrk, _wcsspn, _wcscspn, _wcscasecmp, _wcsncasecmp, _atoll, _vswscanf, _iswalnum, _iswalpha, _iswblank, _iswcntrl, _iswdigit, _iswgraph, _iswlower, _iswprint, _iswpunct, _iswspace, _iswupper, _iswxdigit, _towlower, _towupper, _iswctype, _wctype, _towctrans, _wctrans, ___error, _strerror, _strerror$UNIX2003,
       _wcsstr, _wcsrchr, _wcsncat, _wcscoll, _wcstod, _wcstof, _wcstol, _swscanf, _strtoull, _strtoll, _getenv, _bootstrap_look_up, _bootstrap_port, _mach_task_self_, _mach_port_allocate,
       _mach_port_type, _mach_port_deallocate, _mach_port_mod_refs, _mach_msg, _kill, _kill$UNIX2003,
       _opendir$INODE64, _readdir$INODE64, _readdir_r, _closedir, _closedir$UNIX2003, _setlocale, _vswprintf, _swprintf, _wcscmp, _strlen,
