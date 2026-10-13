@@ -9,7 +9,7 @@ import tempfile
 import time
 
 NATIVE = Path(__file__).resolve().parents[1]
-LOADER = NATIVE / "build/game_loader"
+LOADER = Path(os.getenv("LP32_TEST_LOADER", str(NATIVE / "build/game_loader"))).resolve()
 TEST_GAME = os.getenv("LP32_TEST_GAME", "portal2")
 if TEST_GAME not in ("portal2", "l4d2"):
     raise ValueError("LP32_TEST_GAME must select portal2 or l4d2")
