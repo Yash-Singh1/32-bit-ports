@@ -266,11 +266,17 @@ static void fixture_playback(NSString *path)
     CHECK(qt("_StopMovie", args) == 0); drive(movie, .1);
     uint64_t stopped = world_hash(world, width, height);
     drive(movie, .15); CHECK(world_hash(world, width, height) == stopped);
-    /* Source implements looping by seeking back and restarting this movie. */
+    /* Source starts once, then loops by seeking without another StartMovie.
+       Native AVPlayer pauses at EOF, so verify both rewind and continued
+       frame advancement rather than only a changed first frame. */
     seek(movie, 0); drive(movie, .3);
     uint64_t beginning = world_hash(world, width, height); CHECK(beginning != late);
-    CHECK(qt("_StartMovie", args) == 0); drive(movie, 1.25); CHECK(qt("_StopMovie", args) == 0);
+    CHECK(qt("_StartMovie", args) == 0); drive(movie, 1.25);
     task(movie); uint64_t end = world_hash(world, width, height); CHECK(end != beginning);
+    seek(movie, 0); await_changed(movie, world, width, height, end);
+    uint64_t rewound = world_hash(world, width, height);
+    await_changed(movie, world, width, height, rewound);
+    CHECK(qt("_StopMovie", args) == 0);
     seek(movie, 0); drive(movie, .3); CHECK(world_hash(world, width, height) == beginning);
     /* A busy pixel map pins the previous image; the pending frame is retried. */
     const uint32_t world_args[] = {world}; uint32_t map = qd("_GetGWorldPixMap", world_args);

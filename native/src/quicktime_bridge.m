@@ -31,7 +31,7 @@ struct movie {
     AVPlayerItemVideoOutput *output;
     CVPixelBufferRef last_pixels;
     struct seek_state *seek;
-    bool logged_frame;
+    bool logged_frame, started;
     struct movie *next;
 };
 struct audio_context { uint32_t handle; struct audio_context *next; };
@@ -234,6 +234,10 @@ static int copy_frame(struct movie *m)
         bool succeeded = atomic_load(&m->seek->succeeded);
         release_seek(m->seek); m->seek = NULL;
         if (!succeeded) return MOVIE_ERROR;
+        /* QuickTime keeps a started movie running across a loop seek.
+           AVPlayer pauses at EOF, so restore the requested playback state
+           after the seek completes; an explicit StopMovie still wins. */
+        if (m->started) [m->player play];
     }
     if (m->item.status == AVPlayerItemStatusFailed || m->player.status == AVPlayerStatusFailed)
         return MOVIE_ERROR;
@@ -383,8 +387,8 @@ int quicktime_bridge32_dispatch(const char *name, const uint32_t *a, uint64_t *r
                 } else if (!strcmp(name, "SetMovieVolume")) {
                     float volume = (int16_t)a[1] / 256.0f;
                     m->player.volume = fminf(1, fmaxf(0, volume));
-                } else if (!strcmp(name, "StartMovie")) [m->player play];
-                else if (!strcmp(name, "StopMovie")) [m->player pause];
+                } else if (!strcmp(name, "StartMovie")) { m->started = true; [m->player play]; }
+                else if (!strcmp(name, "StopMovie")) { m->started = false; [m->player pause]; }
                 else if (!strcmp(name, "SetMovieTimeValue")) {
                     int32_t tick = (int32_t)a[1];
                     if (tick < 0 || tick > m->duration) status = INVALID_TIME;
