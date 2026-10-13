@@ -2979,6 +2979,33 @@ static int guest_qsort_compare(uint32_t comparator, const void *left,
     return (int32_t)compat_runtime32_call(comparator, arguments, 2);
 }
 
+static uint32_t guest_bsearch(uint32_t key, uint32_t base, uint32_t count,
+                             uint32_t width, uint32_t comparator)
+{
+    if (!count) return 0; /* No pointers or callback are inspected. */
+    uint64_t bytes = (uint64_t)count * width;
+    if (!key || !base || !width || !comparator ||
+        bytes > UINT64_C(0x100000000) - base) {
+        errno = EINVAL;
+        return 0;
+    }
+    /* Search the original guest array. The key may have a different layout
+       from its elements, and must be the comparator's FIRST argument. All
+       search state stays on this host stack, including across nested calls. */
+    uint32_t first = 0, limit = count;
+    while (first < limit) {
+        uint32_t middle = first + (limit - first) / 2;
+        uint32_t element = base + (uint32_t)((uint64_t)middle * width);
+        int order = guest_qsort_compare(comparator,
+            (const void *)(uintptr_t)key, (const void *)(uintptr_t)element);
+        if (compat_runtime32_last_call_trapped()) return 0;
+        if (!order) return element; /* Borrowed pointer into the original array. */
+        if (order < 0) limit = middle;
+        else first = middle + 1;
+    }
+    return 0;
+}
+
 static void guest_qsort_swap(uint8_t *left, uint8_t *right, size_t width)
 {
     uint8_t buffer[256];
@@ -4573,6 +4600,8 @@ static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
         if (guest_old_size) *guest_old_size = (uint32_t)old_size;
         return (uint32_t)status;
     }
+    if (import_is(name, "_bsearch"))
+        return guest_bsearch(arguments[0], arguments[1], arguments[2], arguments[3], arguments[4]);
     if (import_is(name, "_qsort")) {
         if (arguments[1] < 2 || arguments[2] == 0) return 0;
         if (getenv("LP32_TRACE_QSORT")) {

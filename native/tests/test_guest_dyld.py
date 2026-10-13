@@ -56,7 +56,7 @@ exports:
       _SetMovieGWorld, _SetMovieTimeValue, _StartMovie, _StopMovie, _UpdateMovie, _MoviesTask,
       _FindNextComponent, _OpenAComponent, _CloseComponent, _AudioUnitSetProperty, _AudioUnitGetProperty, _AudioUnitGetPropertyInfo,
       _AudioUnitInitialize, _AudioUnitUninitialize, _AudioUnitRender, _alcCaptureOpenDevice, _alcCaptureCloseDevice, _alcGetError,
-      _printf, _fflush, _malloc, _memcmp, ___stdoutp, __NSGetExecutablePath, _getcwd,
+      _printf, _fflush, _malloc, _memcmp, _bsearch, ___stdoutp, __NSGetExecutablePath, _getcwd,
       _strcmp, _strncmp, _strncpy, _lp32_unavailable, _stat, _stat$INODE64, _open$UNIX2003, _open,
       _close, _close$UNIX2003, _lseek, _scandir, _alphasort, _free,
       _sigaction, _raise, _getpid, _iconv_open, _iconv, _iconv_close,
@@ -148,6 +148,7 @@ extern int check_audio_threads(void);
 extern int check_audio_converter(void);
 extern int check_quicktime(void);
 extern int check_strerror(void);
+extern int check_bsearch(void);
 extern int _NSGetExecutablePath(char *, uint32_t *);
 extern int check_audio_unit(void);
 extern int check_sound_manager(void);
@@ -251,6 +252,7 @@ int LauncherMain(void) {
     audio_error = check_audio_converter(); if (audio_error) return audio_error;
     audio_error = check_quicktime(); if (audio_error) return audio_error;
     audio_error = check_strerror(); if (audio_error) return audio_error;
+    audio_error = check_bsearch(); if (audio_error) return audio_error;
     int timer_error = check_time_manager(); if (timer_error) return timer_error;
     int sound_error = check_sound_manager(); if (sound_error) return sound_error;
     int font_error = check_font(); if (font_error) return font_error;
@@ -466,7 +468,7 @@ int check_directory(void) {
                 "-L" + str(root / "bin"), "-lfixture_dep", "-o", str(root / "bin/libfixture_reexport.dylib"))
             dependency = "fixture_reexport"
         run(*flags, "-dynamiclib", "-Wl,-install_name,@loader_path/launcher.dylib",
-            str(root / "launcher.c"), str(root / "many_imports.c"), str(NATIVE / "tests/fixtures/font.c"), str(NATIVE / "tests/fixtures/cf_bridge.c"), str(NATIVE / "tests/fixtures/context.c"), str(NATIVE / "tests/fixtures/mach_ipc.c"), str(NATIVE / "tests/fixtures/steam_guest.c"), str(NATIVE / "tests/fixtures/wide_scan.c"), str(NATIVE / "tests/fixtures/audio_threads.c"), str(NATIVE / "tests/fixtures/audio_converter.c"), str(NATIVE / "tests/fixtures/quicktime.c"), str(NATIVE / "tests/fixtures/strerror.c"), str(NATIVE / "tests/fixtures/audio_unit.c"), str(NATIVE / "tests/fixtures/sound_manager.c"), str(NATIVE / "tests/fixtures/time_manager.c"), str(root / "directory.o"), "-L" + str(root / "bin"), "-l" + dependency,
+            str(root / "launcher.c"), str(root / "many_imports.c"), str(NATIVE / "tests/fixtures/font.c"), str(NATIVE / "tests/fixtures/cf_bridge.c"), str(NATIVE / "tests/fixtures/context.c"), str(NATIVE / "tests/fixtures/mach_ipc.c"), str(NATIVE / "tests/fixtures/steam_guest.c"), str(NATIVE / "tests/fixtures/wide_scan.c"), str(NATIVE / "tests/fixtures/audio_threads.c"), str(NATIVE / "tests/fixtures/audio_converter.c"), str(NATIVE / "tests/fixtures/quicktime.c"), str(NATIVE / "tests/fixtures/strerror.c"), str(NATIVE / "tests/fixtures/bsearch.c"), str(NATIVE / "tests/fixtures/audio_unit.c"), str(NATIVE / "tests/fixtures/sound_manager.c"), str(NATIVE / "tests/fixtures/time_manager.c"), str(root / "directory.o"), "-L" + str(root / "bin"), "-l" + dependency,
             "-o", str(root / "bin/launcher.dylib"))
         image = root / TEST_EXECUTABLE
         run(*flags, "-Wl,-e,_start,-no_pie", str(root / "start.S"), "-o", str(image))
