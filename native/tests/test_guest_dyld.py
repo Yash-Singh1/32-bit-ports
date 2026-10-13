@@ -82,6 +82,7 @@ exports:
       _CFDictionaryCreateMutable, _CFDictionarySetValue, _CFDictionaryGetValue,
       _CFURLCreateWithBytes, _CFNetworkCopyProxiesForURL,
       _CFUUIDGetConstantUUIDWithBytes, _CFUUIDGetUUIDBytes,
+      _objc_msgSend_stret,
       _CFBooleanGetValue, _CFStringGetMaximumSizeForEncoding,
       _CFAllocatorCreate, _CFAllocatorAllocate, _CFAllocatorDeallocate,
       _CFReadStreamCreate, _CFReadStreamOpen,
@@ -458,6 +459,10 @@ int check_directory(void) {
     for version, address in variants:
         flags = ["xcrun", "clang", "-target", "i386-apple-macos" + version,
                  "-nostdlib", "-fno-builtin", "-L" + str(root), "-lSystem", str(root / "helper.S")]
+        if os.getenv("LP32_CF_BRIDGE_ONLY"):
+            optimization = os.getenv("LP32_CF_BRIDGE_OPTIMIZATION", "-O0")
+            assert optimization in ("-O0", "-O2"), optimization
+            flags.append(optimization)
         # Recent Xcode releases removed i386 from their default linker. A
         # private older ld64 can build fixtures without changing xcode-select.
         if os.getenv("LP32_I386_LINKER"):

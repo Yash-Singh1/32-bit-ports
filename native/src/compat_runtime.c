@@ -409,6 +409,45 @@ static char dynamic_symbol_names[kDynamicThunkCapacity][512];
 static _Atomic uint32_t dynamic_symbol_count;
 static pthread_mutex_t dynamic_symbol_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* Struct-return stack cleanup is immutable for each resolved import and
+   selected profile. Classify names once, rather than on every gateway call. */
+static uint8_t *import_callee_pop_table;
+static _Atomic uint8_t dynamic_callee_pop_table[kDynamicThunkCapacity];
+static bool import_callee_pop_enabled;
+static bool import_callee_pop_cache_disabled;
+
+static bool import_name_uses_hidden_result(const char *name)
+{
+    return !strcmp(name, "_objc_msgSend_stret") ||
+           !strcmp(name, "_CGDisplayBounds") ||
+           !strcmp(name, "_CFUUIDGetUUIDBytes") ||
+           !strcmp(name, "_CFAbsoluteTimeGetGregorianDate") ||
+           steam_bridge32_stret(name);
+}
+
+static int initialize_import_callee_pop_cache(const struct macho_image32 *image)
+{
+    import_callee_pop_enabled = lp32_profile()->callee_pops_struct_return != 0;
+    import_callee_pop_cache_disabled = getenv("LP32_NO_STRET_CACHE") != NULL;
+    free(import_callee_pop_table);
+    import_callee_pop_table = calloc(image->import_count ? image->import_count : 1,
+                                     sizeof(*import_callee_pop_table));
+    if (!import_callee_pop_table) return -1;
+    for (uint32_t index = 0; index < image->import_count; ++index) {
+        import_callee_pop_table[index] = import_callee_pop_enabled &&
+            import_name_uses_hidden_result(image->imports[index].name);
+    }
+    pthread_mutex_lock(&dynamic_symbol_lock);
+    uint32_t count = atomic_load_explicit(&dynamic_symbol_count, memory_order_relaxed);
+    for (uint32_t index = 0; index < kDynamicThunkCapacity; ++index) {
+        bool pop = import_callee_pop_enabled && index < count &&
+            import_name_uses_hidden_result(dynamic_symbol_names[index]);
+        atomic_store_explicit(&dynamic_callee_pop_table[index], pop, memory_order_release);
+    }
+    pthread_mutex_unlock(&dynamic_symbol_lock);
+    return 0;
+}
+
 /*
  * Cg is still present in the game bundle as an x86_64 slice.  Cg 3.0 does not
  * hand out pointers for CGcontext/CGprogram/CGparameter: every handle is a
@@ -1329,6 +1368,9 @@ static uint32_t guest_thunk_for_dynamic_symbol(const char *name)
     }
     uint32_t index = dynamic_symbol_count;
     strcpy(dynamic_symbol_names[index], name);
+    atomic_store_explicit(&dynamic_callee_pop_table[index],
+        import_callee_pop_enabled && import_name_uses_hidden_result(name),
+        memory_order_release);
     ++dynamic_symbol_count;
     pthread_mutex_unlock(&dynamic_symbol_lock);
     return kDynamicThunksBase + index * kImportThunkSize;
@@ -3085,6 +3127,8 @@ int compat_runtime32_initialize(struct macho_image32 *image)
         return runtime_error("x86_64 host is not running through Rosetta");
     }
     current_image = image;
+    if (initialize_import_callee_pop_cache(image) != 0)
+        return runtime_error("allocate import struct-return cache");
     import_stage_table = calloc(image->import_count ? image->import_count : 1,
                                 sizeof(*import_stage_table));
     import_profile_table = calloc(image->import_count ? image->import_count : 1,
@@ -3180,12 +3224,19 @@ static uint64_t dispatch_import_chained(uint32_t import_id, const char *name,
    objc_msgSend_stret result pointer. The older LEGO callers clean it up. */
 uint32_t *lp32_adjust_import_stack(uint32_t *stack)
 {
-    const char *name = import_name_for_id(stack[0]);
-    if (lp32_profile()->callee_pops_struct_return &&
-        (!strcmp(name, "_objc_msgSend_stret") || !strcmp(name, "_CGDisplayBounds") ||
-         !strcmp(name, "_CFUUIDGetUUIDBytes") ||
-         !strcmp(name, "_CFAbsoluteTimeGetGregorianDate") ||
-         steam_bridge32_stret(name))) {
+    if (!import_callee_pop_enabled) return stack;
+    uint32_t import_id = stack[0];
+    bool pop = false;
+    if (import_callee_pop_cache_disabled) {
+        pop = import_name_uses_hidden_result(import_name_for_id(import_id));
+    } else if (import_id & UINT32_C(0x80000000)) {
+        uint32_t index = import_id & UINT32_C(0x7fffffff);
+        if (index < kDynamicThunkCapacity)
+            pop = atomic_load_explicit(&dynamic_callee_pop_table[index], memory_order_acquire);
+    } else if (current_image && import_id < current_image->import_count) {
+        pop = import_callee_pop_table[import_id];
+    }
+    if (pop) {
         stack[2] = stack[1];
         return stack + 1;
     }
