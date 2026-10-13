@@ -3970,6 +3970,9 @@ static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
         return thread ? pthread_mach_thread_np(thread) : MACH_PORT_NULL;
     }
     if (import_is(name, "_thread_resume")) return (uint32_t)thread_resume(arguments[0]);
+    /* The import gateway releases the guest execution lock before native
+       dispatch. A self-suspend may block here until another guest resumes it. */
+    if (import_is(name, "_thread_suspend")) return (uint32_t)thread_suspend(arguments[0]);
     if (import_is(name, "_thread_policy_set")) return (uint32_t)thread_policy_set(arguments[0], arguments[1], (thread_policy_t)(uintptr_t)arguments[2], arguments[3]);
     if (import_is(name, "_sched_get_priority_min")) return (uint32_t)sched_get_priority_min(arguments[0]);
     if (import_is(name, "_sched_get_priority_max")) return (uint32_t)sched_get_priority_max(arguments[0]);
