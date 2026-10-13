@@ -2778,8 +2778,9 @@ static int guest_pthread_once(uint32_t control, uint32_t initializer)
  * before any bytes are compared.  import_is also records that the runtime
  * chain matched the name at all: a name that reaches the audio/Objective-C
  * stages without any runtime match is memoized per import id so later calls
- * skip the runtime chain entirely.  A runtime handler that matches and then
- * deliberately falls through keeps the full chain, so behaviour is unchanged.
+ * skip the latter runtime chain. A core match also records that the earlier
+ * module bridges rejected this immutable name, so later calls skip only those
+ * probes. Core handlers and their fallthrough paths are still evaluated.
  */
 static _Thread_local size_t dispatch_name_length;
 static _Thread_local bool dispatch_name_matched;
@@ -3426,6 +3427,59 @@ static uint64_t fast_expf(const uint32_t *arguments, uint32_t return_address)
     return return_guest_float(expf(guest_float(arguments[0])));
 }
 
+static uint64_t fast_strlen(const uint32_t *arguments, uint32_t return_address)
+{
+    (void)return_address;
+    return (uint32_t)strlen((const char *)(uintptr_t)arguments[0]);
+}
+
+static uint64_t fast_strcmp(const uint32_t *arguments, uint32_t return_address)
+{
+    (void)return_address;
+    return (uint32_t)strcmp((const char *)(uintptr_t)arguments[0],
+                           (const char *)(uintptr_t)arguments[1]);
+}
+
+static uint64_t fast_strncmp(const uint32_t *arguments, uint32_t return_address)
+{
+    (void)return_address;
+    return (uint32_t)strncmp((const char *)(uintptr_t)arguments[0],
+                            (const char *)(uintptr_t)arguments[1],arguments[2]);
+}
+
+static uint64_t fast_strcasecmp(const uint32_t *arguments, uint32_t return_address)
+{
+    (void)return_address;
+    return (uint32_t)strcasecmp((const char *)(uintptr_t)arguments[0],
+                               (const char *)(uintptr_t)arguments[1]);
+}
+
+static uint64_t fast_strrchr(const uint32_t *arguments, uint32_t return_address)
+{
+    (void)return_address;
+    return (uint32_t)(uintptr_t)strrchr((const char *)(uintptr_t)arguments[0],
+                                      (int)arguments[1]);
+}
+
+static uint64_t fast_memcmp(const uint32_t *arguments, uint32_t return_address)
+{
+    (void)return_address;
+    return (uint32_t)memcmp((const void *)(uintptr_t)arguments[0],
+                           (const void *)(uintptr_t)arguments[1],arguments[2]);
+}
+
+static uint64_t fast_tolower(const uint32_t *arguments, uint32_t return_address)
+{
+    (void)return_address;
+    return (uint32_t)tolower((int)arguments[0]);
+}
+
+static uint64_t fast_toupper(const uint32_t *arguments, uint32_t return_address)
+{
+    (void)return_address;
+    return (uint32_t)toupper((int)arguments[0]);
+}
+
 static uint64_t fast_pthread_mutex_lock(const uint32_t *arguments,
                                         uint32_t return_address)
 {
@@ -3488,6 +3542,15 @@ static lp32_fast_import_fn runtime_fast_import(const char *name)
         {"___memset_chk", fast_memset},
         {"_logf", fast_logf},
         {"_expf", fast_expf},
+        {"_strlen", fast_strlen},
+        {"_strcmp", fast_strcmp},
+        {"_strncmp", fast_strncmp},
+        {"_strcasecmp", fast_strcasecmp},
+        {"_strrchr", fast_strrchr},
+        {"_rindex", fast_strrchr},
+        {"_memcmp", fast_memcmp},
+        {"___tolower", fast_tolower},
+        {"___toupper", fast_toupper},
         {"_pthread_mutex_lock", fast_pthread_mutex_lock},
         {"_pthread_mutex_trylock", fast_pthread_mutex_trylock},
         {"_pthread_mutex_unlock", fast_pthread_mutex_unlock},
@@ -3497,6 +3560,11 @@ static lp32_fast_import_fn runtime_fast_import(const char *name)
     }
     return NULL;
 }
+
+static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
+                                           const uint32_t *arguments,
+                                           uint32_t return_address,
+                                           bool probe_module_bridges);
 
 static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
                                       const uint32_t *arguments,
@@ -3512,17 +3580,43 @@ static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
         unix_name[length] = 0;
         name = unix_name;
     }
+    /* Guest callbacks can dispatch another import before this one returns.
+       Keep the enclosing name/match state intact across that nested call. */
+    size_t previous_length = dispatch_name_length;
+    bool previous_match = dispatch_name_matched;
     dispatch_name_length = strlen(name);
     dispatch_name_matched = false;
-    uint64_t network_result;
-    if (lp32_profile()->title == LP32_TITLE_L4D2 &&
-        (quicktime_support32_dispatch(name, arguments, &network_result) ||
-         quicktime_bridge32_dispatch(name, arguments, &network_result))) return network_result;
-    if (steam_bridge32_dispatch(name, arguments, &network_result)) return network_result;
-    if (zlib_bridge32_dispatch(name, arguments, &network_result)) return network_result;
-    if (time_manager_bridge32_dispatch(name, arguments, &network_result)) return network_result;
-    if (network_bridge32_dispatch(name, arguments, &network_result)) return network_result;
-    if (font_bridge32_dispatch(name, arguments, &network_result)) return network_result;
+    uint8_t *stage = import_stage_slot(import_id);
+    bool probe_modules = fast_imports_disabled || !stage ||
+        __atomic_load_n(stage, __ATOMIC_RELAXED) != kImportStageRuntime;
+    uint64_t result = dispatch_named_import_body(import_id, name, arguments,
+                                                 return_address, probe_modules);
+    /* The module bridges' names are disjoint from the core import_is names.
+       Cache only a core match, never an argument-dependent bridge rejection
+       such as an unknown font context. The imported name/profile stay fixed. */
+    if (!fast_imports_disabled && stage && dispatch_name_matched)
+        __atomic_store_n(stage, kImportStageRuntime, __ATOMIC_RELAXED);
+    dispatch_name_length = previous_length;
+    dispatch_name_matched = previous_match;
+    return result;
+}
+
+static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
+                                           const uint32_t *arguments,
+                                           uint32_t return_address,
+                                           bool probe_module_bridges)
+{
+    if (probe_module_bridges) {
+        uint64_t network_result;
+        if (lp32_profile()->title == LP32_TITLE_L4D2 &&
+            (quicktime_support32_dispatch(name, arguments, &network_result) ||
+             quicktime_bridge32_dispatch(name, arguments, &network_result))) return network_result;
+        if (steam_bridge32_dispatch(name, arguments, &network_result)) return network_result;
+        if (zlib_bridge32_dispatch(name, arguments, &network_result)) return network_result;
+        if (time_manager_bridge32_dispatch(name, arguments, &network_result)) return network_result;
+        if (network_bridge32_dispatch(name, arguments, &network_result)) return network_result;
+        if (font_bridge32_dispatch(name, arguments, &network_result)) return network_result;
+    }
     if (import_is(name, "_NewPtr")) return guest_allocate(arguments[0], false);
     if (import_is(name, "_DisposePtr")) { guest_deallocate(arguments[0]); return 0; }
     if (import_is(name, "_MPCreateCriticalRegion")) {
@@ -3759,8 +3853,8 @@ static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
     }
     if (import_is(name, "_wctob")) return (uint32_t)wctob(arguments[0]);
     if (import_is(name, "_btowc")) return (uint32_t)btowc((int)arguments[0]);
-    if (import_is(name, "___tolower")) return (uint32_t)tolower((int)arguments[0]);
-    if (import_is(name, "___toupper")) return (uint32_t)toupper((int)arguments[0]);
+    if (import_is(name, "___tolower")) return fast_tolower(arguments, return_address);
+    if (import_is(name, "___toupper")) return fast_toupper(arguments, return_address);
     if (import_is(name, "___maskrune")) return (uint32_t)__maskrune((int)arguments[0], arguments[1]);
     if (import_is(name, "_setlocale")) {
         const char *result = setlocale((int)arguments[0], (const char *)(uintptr_t)arguments[1]);
@@ -3980,7 +4074,7 @@ static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
     if (import_is(name, "_puts")) return (uint32_t)puts((const char *)(uintptr_t)arguments[0]);
     if (import_is(name, "_putchar")) return (uint32_t)putchar((int)arguments[0]);
     if (import_is(name, "_sleep")) return sleep(arguments[0]);
-    if (import_is(name, "_strcasecmp")) return (uint32_t)strcasecmp((const char *)(uintptr_t)arguments[0], (const char *)(uintptr_t)arguments[1]);
+    if (import_is(name, "_strcasecmp")) return fast_strcasecmp(arguments, return_address);
     if (import_is(name, "_strspn")) return (uint32_t)strspn((const char *)(uintptr_t)arguments[0], (const char *)(uintptr_t)arguments[1]);
     if (import_is(name, "_strcspn")) return (uint32_t)strcspn((const char *)(uintptr_t)arguments[0], (const char *)(uintptr_t)arguments[1]);
     if (import_is(name, "_strpbrk")) return (uint32_t)(uintptr_t)strpbrk((const char *)(uintptr_t)arguments[0], (const char *)(uintptr_t)arguments[1]);
@@ -4105,9 +4199,11 @@ static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
         return (uint32_t)pthread_cond_timedwait(condition, mutex, &limit);
     }
     const uint8_t *stage = import_stage_slot(import_id);
-    if (stage && *stage >= kImportStageAudio) {
+    uint8_t known_stage = stage ? __atomic_load_n(stage, __ATOMIC_RELAXED) :
+                                kImportStageUnknown;
+    if (known_stage >= kImportStageAudio) {
         return dispatch_bridge_stages(import_id, name, arguments,
-                                      return_address, *stage);
+                                      return_address, known_stage);
     }
     if (import_is(name, "__keymgr_get_and_lock_processwide_ptr_2")) {
         uint32_t key = arguments[0];
@@ -4438,23 +4534,20 @@ static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
         return fast_memset(arguments, return_address);
     }
     if (import_is(name, "_memcmp")) {
-        return (uint32_t)memcmp((const void *)(uintptr_t)arguments[0],
-                                (const void *)(uintptr_t)arguments[1], arguments[2]);
+        return fast_memcmp(arguments, return_address);
     }
     if (import_is(name, "_memchr")) {
         return (uint32_t)(uintptr_t)memchr((const void *)(uintptr_t)arguments[0],
                                            (int)arguments[1], arguments[2]);
     }
     if (import_is(name, "_strlen")) {
-        return (uint32_t)strlen((const char *)(uintptr_t)arguments[0]);
+        return fast_strlen(arguments, return_address);
     }
     if (import_is(name, "_strcmp")) {
-        return (uint32_t)strcmp((const char *)(uintptr_t)arguments[0],
-                                (const char *)(uintptr_t)arguments[1]);
+        return fast_strcmp(arguments, return_address);
     }
     if (import_is(name, "_strncmp")) {
-        return (uint32_t)strncmp((const char *)(uintptr_t)arguments[0],
-                                 (const char *)(uintptr_t)arguments[1], arguments[2]);
+        return fast_strncmp(arguments, return_address);
     }
     if (import_is(name, "_strcpy")) {
         strcpy((char *)(uintptr_t)arguments[0],
@@ -4476,8 +4569,7 @@ static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
                                            (int)arguments[1]);
     }
     if (import_is(name, "_strrchr") || import_is(name, "_rindex")) {
-        return (uint32_t)(uintptr_t)strrchr((const char *)(uintptr_t)arguments[0],
-                                            (int)arguments[1]);
+        return fast_strrchr(arguments, return_address);
     }
     if (import_is(name, "_strstr")) {
         return (uint32_t)(uintptr_t)strstr((const char *)(uintptr_t)arguments[0],
@@ -5409,7 +5501,7 @@ static uint64_t dispatch_bridge_stages(uint32_t import_id, const char *name,
         }
         if (known_stage == kImportStageUnknown && !dispatch_name_matched) {
             uint8_t *slot = import_stage_slot(import_id);
-            if (slot) *slot = kImportStageAudio;
+            if (slot) __atomic_store_n(slot, kImportStageAudio, __ATOMIC_RELAXED);
         }
         return result;
     }
@@ -5418,7 +5510,7 @@ static uint64_t dispatch_bridge_stages(uint32_t import_id, const char *name,
         if (stage_start) frame_profile.objc_ns += profile_now() - stage_start;
         if (known_stage == kImportStageUnknown && !dispatch_name_matched) {
             uint8_t *slot = import_stage_slot(import_id);
-            if (slot) *slot = kImportStageObjC;
+            if (slot) __atomic_store_n(slot, kImportStageObjC, __ATOMIC_RELAXED);
         }
         return result;
     }

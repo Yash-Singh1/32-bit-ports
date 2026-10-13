@@ -56,6 +56,11 @@ static int compare_records(const void *left, const void *right)
             key->failure = 4; return INT_MIN;
         }
         if (strcmp(strerror(65),expected_route)) { key->failure = 5; return INT_MIN; }
+        /* End a nested callback in a front-module bridge. The outer core
+           dispatch must retain its name/match state on the next search. */
+        struct { char name[256]; uint32_t guard; } hostname = {{0},0x4567abcd};
+        if (gethostname(hostname.name,sizeof(hostname.name)) ||
+            hostname.guard != 0x4567abcd) { key->failure = 6; return INT_MIN; }
     }
     int actual = ((const struct element *)right)->value;
     return key->value == actual ? 0 : key->value < actual ? INT_MIN : INT_MAX;

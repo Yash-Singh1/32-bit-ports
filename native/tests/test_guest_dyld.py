@@ -59,7 +59,7 @@ exports:
       _printf, _fflush, _malloc, _memcmp, _bsearch, _feof, _ferror, _fopen, _fopen$UNIX2003, _fclose,
       _fread, _fgetc, _fseek, _clearerr, _strtof, _strtof$UNIX2003,
       ___stdoutp, __NSGetExecutablePath, _getcwd,
-      _strcmp, _strncmp, _strncpy, _lp32_unavailable, _stat, _stat$INODE64, _open$UNIX2003, _open,
+      _strcmp, _strncmp, _strcasecmp, _strrchr, ___toupper, ___tolower, _strncpy, _lp32_unavailable, _stat, _stat$INODE64, _open$UNIX2003, _open,
       _close, _close$UNIX2003, _lseek, _scandir, _alphasort, _free,
       _sigaction, _raise, _getpid, _iconv_open, _iconv, _iconv_close,
       _mmap, _mmap$UNIX2003, _munmap, _munmap$UNIX2003, _mprotect, _mprotect$UNIX2003,
@@ -152,6 +152,7 @@ extern int check_quicktime(void);
 extern int check_strerror(void);
 extern int check_bsearch(void);
 extern int check_libc_io_float(void);
+extern int check_dispatch_strings(void);
 extern int _NSGetExecutablePath(char *, uint32_t *);
 extern int check_audio_unit(void);
 extern int check_sound_manager(void);
@@ -257,6 +258,7 @@ int LauncherMain(void) {
     audio_error = check_strerror(); if (audio_error) return audio_error;
     audio_error = check_bsearch(); if (audio_error) return audio_error;
     audio_error = check_libc_io_float(); if (audio_error) return audio_error;
+    audio_error = check_dispatch_strings(); if (audio_error) return audio_error;
     int timer_error = check_time_manager(); if (timer_error) return timer_error;
     int sound_error = check_sound_manager(); if (sound_error) return sound_error;
     int font_error = check_font(); if (font_error) return font_error;
@@ -473,7 +475,7 @@ int check_directory(void) {
                 "-L" + str(root / "bin"), "-lfixture_dep", "-o", str(root / "bin/libfixture_reexport.dylib"))
             dependency = "fixture_reexport"
         run(*flags, "-dynamiclib", "-Wl,-install_name,@loader_path/launcher.dylib",
-            str(root / "launcher.c"), str(root / "many_imports.c"), str(NATIVE / "tests/fixtures/font.c"), str(NATIVE / "tests/fixtures/cf_bridge.c"), str(NATIVE / "tests/fixtures/context.c"), str(NATIVE / "tests/fixtures/mach_ipc.c"), str(NATIVE / "tests/fixtures/steam_guest.c"), str(NATIVE / "tests/fixtures/wide_scan.c"), str(NATIVE / "tests/fixtures/audio_threads.c"), str(NATIVE / "tests/fixtures/audio_converter.c"), str(NATIVE / "tests/fixtures/quicktime.c"), str(NATIVE / "tests/fixtures/strerror.c"), str(NATIVE / "tests/fixtures/bsearch.c"), str(NATIVE / "tests/fixtures/libc_io_float.c"), str(NATIVE / "tests/fixtures/audio_unit.c"), str(NATIVE / "tests/fixtures/sound_manager.c"), str(NATIVE / "tests/fixtures/time_manager.c"), str(root / "directory.o"), "-L" + str(root / "bin"), "-l" + dependency,
+            str(root / "launcher.c"), str(root / "many_imports.c"), str(NATIVE / "tests/fixtures/font.c"), str(NATIVE / "tests/fixtures/cf_bridge.c"), str(NATIVE / "tests/fixtures/context.c"), str(NATIVE / "tests/fixtures/mach_ipc.c"), str(NATIVE / "tests/fixtures/steam_guest.c"), str(NATIVE / "tests/fixtures/wide_scan.c"), str(NATIVE / "tests/fixtures/audio_threads.c"), str(NATIVE / "tests/fixtures/audio_converter.c"), str(NATIVE / "tests/fixtures/quicktime.c"), str(NATIVE / "tests/fixtures/strerror.c"), str(NATIVE / "tests/fixtures/bsearch.c"), str(NATIVE / "tests/fixtures/libc_io_float.c"), str(NATIVE / "tests/fixtures/dispatch_strings.c"), str(NATIVE / "tests/fixtures/audio_unit.c"), str(NATIVE / "tests/fixtures/sound_manager.c"), str(NATIVE / "tests/fixtures/time_manager.c"), str(root / "directory.o"), "-L" + str(root / "bin"), "-l" + dependency,
             "-o", str(root / "bin/launcher.dylib"))
         image = root / TEST_EXECUTABLE
         run(*flags, "-Wl,-e,_start,-no_pie", str(root / "start.S"), "-o", str(image))
