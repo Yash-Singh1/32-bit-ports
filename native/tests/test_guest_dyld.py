@@ -36,7 +36,7 @@ exports:
     symbols: [
       _NewTimerUPP, _DisposeTimerUPP, _InstallTimeTask, _PrimeTime, _PrimeTimeTask, _RemoveTimeTask,
       _NewSndCallBackUPP, _DisposeSndCallBackUPP, _SndNewChannel, _SndDisposeChannel, _SndDoCommand, _SndDoImmediate, _SndChannelStatus, _OTAtomicAdd32,
-      _wcstoul, _wcstoll, _wcstoull, _wcsdup, _wcspbrk, _wcsspn, _wcscspn, _wcscasecmp, _wcsncasecmp, _atoll, _vswscanf, _iswalnum, _iswalpha, _iswblank, _iswcntrl, _iswdigit, _iswgraph, _iswlower, _iswprint, _iswpunct, _iswspace, _iswupper, _iswxdigit, _towlower, _towupper, _iswctype, _wctype, _towctrans, _wctrans, ___error,
+      _wcstoul, _wcstoll, _wcstoull, _wcsdup, _wcspbrk, _wcsspn, _wcscspn, _wcscasecmp, _wcsncasecmp, _atoll, _vswscanf, _iswalnum, _iswalpha, _iswblank, _iswcntrl, _iswdigit, _iswgraph, _iswlower, _iswprint, _iswpunct, _iswspace, _iswupper, _iswxdigit, _towlower, _towupper, _iswctype, _wctype, _towctrans, _wctrans, ___error, _strerror,
       _wcsstr, _wcsrchr, _wcsncat, _wcscoll, _wcstod, _wcstof, _wcstol, _swscanf, _strtoull, _strtoll, _getenv, _bootstrap_look_up, _bootstrap_port, _mach_task_self_, _mach_port_allocate,
       _mach_port_type, _mach_port_deallocate, _mach_port_mod_refs, _mach_msg, _kill, _kill$UNIX2003,
       _opendir$INODE64, _readdir$INODE64, _readdir_r, _closedir, _closedir$UNIX2003, _setlocale, _vswprintf, _swprintf, _wcscmp, _strlen,
@@ -147,6 +147,7 @@ extern int check_wide_scan(void);
 extern int check_audio_threads(void);
 extern int check_audio_converter(void);
 extern int check_quicktime(void);
+extern int check_strerror(void);
 extern int _NSGetExecutablePath(char *, uint32_t *);
 extern int check_audio_unit(void);
 extern int check_sound_manager(void);
@@ -249,6 +250,7 @@ int LauncherMain(void) {
     int audio_error = check_audio_threads(); if (audio_error) return audio_error;
     audio_error = check_audio_converter(); if (audio_error) return audio_error;
     audio_error = check_quicktime(); if (audio_error) return audio_error;
+    audio_error = check_strerror(); if (audio_error) return audio_error;
     int timer_error = check_time_manager(); if (timer_error) return timer_error;
     int sound_error = check_sound_manager(); if (sound_error) return sound_error;
     int font_error = check_font(); if (font_error) return font_error;
@@ -464,7 +466,7 @@ int check_directory(void) {
                 "-L" + str(root / "bin"), "-lfixture_dep", "-o", str(root / "bin/libfixture_reexport.dylib"))
             dependency = "fixture_reexport"
         run(*flags, "-dynamiclib", "-Wl,-install_name,@loader_path/launcher.dylib",
-            str(root / "launcher.c"), str(root / "many_imports.c"), str(NATIVE / "tests/fixtures/font.c"), str(NATIVE / "tests/fixtures/cf_bridge.c"), str(NATIVE / "tests/fixtures/context.c"), str(NATIVE / "tests/fixtures/mach_ipc.c"), str(NATIVE / "tests/fixtures/steam_guest.c"), str(NATIVE / "tests/fixtures/wide_scan.c"), str(NATIVE / "tests/fixtures/audio_threads.c"), str(NATIVE / "tests/fixtures/audio_converter.c"), str(NATIVE / "tests/fixtures/quicktime.c"), str(NATIVE / "tests/fixtures/audio_unit.c"), str(NATIVE / "tests/fixtures/sound_manager.c"), str(NATIVE / "tests/fixtures/time_manager.c"), str(root / "directory.o"), "-L" + str(root / "bin"), "-l" + dependency,
+            str(root / "launcher.c"), str(root / "many_imports.c"), str(NATIVE / "tests/fixtures/font.c"), str(NATIVE / "tests/fixtures/cf_bridge.c"), str(NATIVE / "tests/fixtures/context.c"), str(NATIVE / "tests/fixtures/mach_ipc.c"), str(NATIVE / "tests/fixtures/steam_guest.c"), str(NATIVE / "tests/fixtures/wide_scan.c"), str(NATIVE / "tests/fixtures/audio_threads.c"), str(NATIVE / "tests/fixtures/audio_converter.c"), str(NATIVE / "tests/fixtures/quicktime.c"), str(NATIVE / "tests/fixtures/strerror.c"), str(NATIVE / "tests/fixtures/audio_unit.c"), str(NATIVE / "tests/fixtures/sound_manager.c"), str(NATIVE / "tests/fixtures/time_manager.c"), str(root / "directory.o"), "-L" + str(root / "bin"), "-l" + dependency,
             "-o", str(root / "bin/launcher.dylib"))
         image = root / TEST_EXECUTABLE
         run(*flags, "-Wl,-e,_start,-no_pie", str(root / "start.S"), "-o", str(image))
@@ -489,6 +491,8 @@ int check_directory(void) {
                            LP32_DYLD_FIXTURE_SELFTEST="1", LP32_LOG_DIR=str(root / "logs"),
                            LP32_STEAM_FIXTURE=str(root / "steamclient.dylib"),
                            LP32_FIXTURE_EXPECTED_ROOT=str(root), LP32_FIXTURE_EXPECTED_EXECUTABLE=TEST_EXECUTABLE)
+        for index, error in enumerate((65, 2, 13, 0, -1, -2147483648, 2147483647, 123456789)):
+            environment[f"LP32_STRERROR_{index}"] = os.strerror(error)
         if TEST_GAME == "l4d2":
             environment["LP32_FIXTURE_QUICKTIME"] = "1"
         if TEST_GAME == "portal2" and version == "10.5" and address == 0 and not os.getenv("LP32_CF_BRIDGE_ONLY"):

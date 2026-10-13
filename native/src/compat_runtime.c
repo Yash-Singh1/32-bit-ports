@@ -2415,6 +2415,45 @@ static uint32_t copy_host_tm_to_guest(const struct tm *host,
     return (uint32_t)(uintptr_t)guest;
 }
 
+static uint32_t guest_strerror(int error)
+{
+    /* Host strerror pointers (and its mutable unknown-error buffer) cannot
+       escape to i386. Cache immutable guest copies for the process lifetime.
+       Darwin strerror_r fills the truthful unknown string and returns EINVAL;
+       strerror itself also sets errno to EINVAL for that case. */
+    struct error_string { int error, status; uint32_t guest; struct error_string *next; };
+    static struct error_string *strings;
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    int saved_errno = errno;
+    pthread_mutex_lock(&lock);
+    for (struct error_string *entry = strings; entry; entry = entry->next) {
+        if (entry->error != error) continue;
+        uint32_t guest = entry->guest;
+        int status = entry->status;
+        pthread_mutex_unlock(&lock);
+        errno = status ? status : saved_errno;
+        return guest;
+    }
+    char message[256] = {0};
+    int status = strerror_r(error, message, sizeof(message));
+    if ((status && status != EINVAL) || !message[0] ||
+        !memchr(message, 0, sizeof(message))) {
+        pthread_mutex_unlock(&lock);
+        errno = status ? status : ERANGE;
+        return 0;
+    }
+    struct error_string *entry = malloc(sizeof(*entry));
+    uint32_t guest = entry ? compat_runtime32_copy_cstring(message) : 0;
+    if (!guest) {
+        free(entry); pthread_mutex_unlock(&lock); errno = ENOMEM; return 0;
+    }
+    *entry = (struct error_string){error, status, guest, strings};
+    strings = entry;
+    pthread_mutex_unlock(&lock);
+    errno = status ? status : saved_errno;
+    return guest;
+}
+
 static void append_formatted(char *output, size_t capacity, size_t *length,
                              const char *piece, size_t piece_length)
 {
@@ -3700,6 +3739,7 @@ static uint64_t dispatch_named_import(uint32_t import_id, const char *name,
         const char *result = setlocale((int)arguments[0], (const char *)(uintptr_t)arguments[1]);
         return result ? compat_runtime32_copy_cstring(result) : 0;
     }
+    if (import_is(name, "_strerror")) return guest_strerror((int32_t)arguments[0]);
     if (import_is(name, "_wcslen")) return (uint32_t)wcslen((const wchar_t *)(uintptr_t)arguments[0]);
     if (import_is(name, "_mbstowcs")) return (uint32_t)mbstowcs((wchar_t *)(uintptr_t)arguments[0], (const char *)(uintptr_t)arguments[1], arguments[2]);
     if (import_is(name, "_wcstombs")) return (uint32_t)wcstombs((char *)(uintptr_t)arguments[0], (const wchar_t *)(uintptr_t)arguments[1], arguments[2]);
