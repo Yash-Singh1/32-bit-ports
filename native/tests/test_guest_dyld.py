@@ -24,7 +24,7 @@ def run(*args, **kwargs):
 
 
 with tempfile.TemporaryDirectory(prefix="lp32-dyld-") as tmp:
-    root = Path(tmp)
+    root = Path(tmp).resolve()
     (root / "bin").mkdir()
     # Link-time declarations only. All actual system calls go through the bridge.
     (root / "libSystem.tbd").write_text("""--- !tapi-tbd-v3
