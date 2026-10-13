@@ -122,6 +122,9 @@ void *CreateInterface(const char *version, int *status) {
     if (!strcmp(version, "SteamNetworking006")) return &network;
     if (!strcmp(version, "SteamParties002")) return &party;
     if (!strcmp(version, "SteamGameServer014")) return &server;
-    if (!strcmp(version, "STEAMTIMELINE_INTERFACE_V001")) return &timeline;
+    if (!strcmp(version, "STEAMTIMELINE_INTERFACE_V001")) {
+        timeline_calls = 0;
+        return &timeline;
+    }
     abort();
 }
