@@ -228,11 +228,12 @@ test-crash-trace: $(BUILD_DIR)/test_crash_trace
 	arch -x86_64 ./$(BUILD_DIR)/test_crash_trace
 
 $(BUILD_DIR)/game_loader: src/game_loader.c src/crash_trace.c src/crash_trace.h src/physics_trace.c src/physics_trace.h src/game_profile.c src/macho_loader.c src/macho_file.c src/guest_dyld.c src/steam_bridge.c src/steam_startup.c src/steam_startup.h src/objc_bridge.h src/zlib_bridge.c src/zlib_bridge.h src/steam_bridge.h src/steam_abi.inc src/guest_memory.c src/network_bridge.c src/font_bridge.m src/gl_shader_bridge.c src/gl_misc_bridge.c src/compat_runtime.c src/wide_format.c src/audio_bridge.c src/audio_queue_bridge.c src/openal_capture_bridge.c src/openal_capture_bridge.h src/sound_manager_bridge.c src/sound_manager_bridge.h src/time_manager_bridge.c src/time_manager_bridge.h src/controller_bridge.m src/cursor_state.c src/objc_bridge.m src/arb_program_guard.c src/arb_sampler_usage.c src/mode32_switch.S src/import_gateway.S src/guest_context.S src/address_space_reserve.S | $(BUILD_DIR)
-	$(CLANG) $(CFLAGS) $(LDFLAGS) $(filter %.c %.m %.S,$^) -framework Cocoa -framework Carbon -framework OpenGL -framework ImageIO -framework CoreText -framework CFNetwork -framework AudioToolbox -framework AudioUnit -framework CoreAudio -framework OpenAL -framework GameController -framework IOKit -liconv -lffi -lz -o $@
+	$(CLANG) $(CFLAGS) $(LDFLAGS) $(filter %.c %.m %.S,$^) -framework Cocoa -framework Carbon -framework OpenGL -framework ImageIO -framework CoreText -framework CFNetwork -framework AudioToolbox -framework AudioUnit -framework CoreAudio -framework OpenAL -framework GameController -framework IOKit -framework AVFoundation -framework CoreMedia -framework CoreVideo -liconv -lffi -lz -o $@
 	codesign --force --sign - $@
 
 $(BUILD_DIR)/game_loader: src/game_profile.h
 $(BUILD_DIR)/game_loader: src/audio_converter_bridge.c src/audio_converter_bridge.h
+$(BUILD_DIR)/game_loader: src/quicktime_bridge.m src/quicktime_bridge.h src/quicktime_support.c src/quicktime_support.h
 
 .PHONY: test-audio-converter
 $(BUILD_DIR)/test_audio_converter_bridge: tests/test_audio_converter_bridge.c src/audio_converter_bridge.c src/audio_converter_bridge.h | $(BUILD_DIR)
