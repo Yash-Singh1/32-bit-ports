@@ -3,6 +3,7 @@
 #include "physics_trace.h"
 #include "wide_format.h"
 #include "audio_bridge.h"
+#include "audio_converter_bridge.h"
 #include "controller_bridge.h"
 #include "game_profile.h"
 #include "guest_dyld.h"
@@ -5306,7 +5307,8 @@ static uint64_t dispatch_bridge_stages(uint32_t import_id, const char *name,
         profile_now() : 0;
     uint64_t result = 0;
     if (known_stage != kImportStageObjC &&
-        audio_bridge32_dispatch(name, arguments, &result)) {
+        (audio_converter_bridge32_dispatch(name, arguments, &result) ||
+         audio_bridge32_dispatch(name, arguments, &result))) {
         if (stage_start) {
             uint64_t elapsed = profile_now() - stage_start;
             frame_profile.audio_ns += elapsed;
