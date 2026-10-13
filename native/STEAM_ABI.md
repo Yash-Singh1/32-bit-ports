@@ -68,7 +68,7 @@ The reported relayed-client authentication failure is not fixed by ABI tracing
 or by the table overrides. `test-portal2-coop` checks callback payloads and
 delivery against a mock client, including all denial reasons 0–14.
 
-The audit covers the generated 983 method entries; it is not a claim that
+The audit covers the generated 987 method entries; it is not a claim that
 every Steamworks feature is implemented. There are still 46 entries with
 explicitly unsupported types/handles. They fail with a named diagnostic
 instead of passing incompatible pointers to native Steam:

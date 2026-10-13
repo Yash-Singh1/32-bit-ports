@@ -390,6 +390,12 @@ int lp32_profile_select_hint(const struct macho_image32 *image,
             return -1;
         }
     } else if (hint) {
+        if (!hint->entry_eip || !hint->image_end ||
+            hint->entry_eip != image->entry_eip || hint->image_end != image->max_address) {
+            fprintf(stderr, "game_loader: %s bundle contains an unrecognised launcher (entry=0x%08x end=0x%08x)\n",
+                    hint->name, image->entry_eip, image->max_address);
+            return -1;
+        }
         selected = hint;
     } else {
         for (size_t index = 0; index < sizeof(known_profiles) / sizeof(known_profiles[0]); ++index) {
