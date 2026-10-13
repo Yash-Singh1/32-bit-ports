@@ -2841,10 +2841,21 @@ static void capture_game_frame(uint64_t swap_count)
 static void portal_flush_buffer(NSOpenGLContext *context)
 {
     static int stats_enabled = -1;
-    if (stats_enabled < 0)
+    static unsigned stats_interval = 240;
+    if (stats_enabled < 0) {
         stats_enabled = getenv("LP32_SOURCE_FRAME_STATS") != NULL ||
                         getenv("LP32_PORTAL_FRAME_STATS") != NULL ||
                         compat_runtime32_frame_profile_enabled;
+        /* Shorter opt-in blocks expose loading work before 240 presentations
+           have completed. Keep the normal cadence and fixed storage bound. */
+        const char *interval_text = getenv("LP32_SOURCE_STATS_INTERVAL");
+        if (interval_text && interval_text[0]) {
+            char *end = NULL;
+            unsigned long requested = strtoul(interval_text, &end, 10);
+            if (end && !*end && requested >= 1 && requested <= 240)
+                stats_interval = (unsigned)requested;
+        }
+    }
     uint64_t start = stats_enabled ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
     capture_game_frame(objc_bridge_swap_count + 1);
     [context flushBuffer];
@@ -2859,7 +2870,7 @@ static void portal_flush_buffer(NSOpenGLContext *context)
             total += now - last;
             flush += now - start;
             draws += gl_frame_diagnostics.draw_calls;
-            if (count == interval) {
+            if (count == stats_interval) {
                 qsort(durations, count, sizeof(*durations), compare_frame_ns);
                 pthread_mutex_lock(&portal_cursor_lock);
                 bool focused = portal_cursor.focused;
