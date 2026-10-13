@@ -457,4 +457,3 @@ static void verify_audio_track(NSString *path)
     CHECK(sqrt(energy / (bytes / 2)) > .10);
     free(pcm); CFRelease(sample); [reader cancelReading];
 }
-
