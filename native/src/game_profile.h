@@ -19,6 +19,7 @@ enum lp32_title {
     LP32_TITLE_PIRATES,
     LP32_TITLE_CLONE_WARS,
     LP32_TITLE_PORTAL2,
+    LP32_TITLE_L4D2,
 };
 
 /* Splash-dismiss repeat latch (see game_loader.c). */
@@ -172,11 +173,21 @@ struct lp32_game_profile {
     /* NuSound streamer render callback (diagnostics only: lets the audio
        bridge read the stream's refill-request ring). 0 = unknown. */
     uint32_t stream_input_callback;
+    int thread_argument_is_direct;
+    int callee_pops_struct_return;
+    uint32_t steam_app_id;
+    /* Source content and process identity, relative to SharedSupport/game root. */
+    const char *source_data_directory;
+    const char *source_executable;
+    const char *source_game_directory;
 };
 
 /* Chooses the profile for a loaded image (LP32_GAME overrides detection).
    Returns -1 when the image is not a known title. */
 int lp32_profile_select(const struct macho_image32 *image);
+int lp32_profile_select_hint(const struct macho_image32 *image,
+                             const struct lp32_game_profile *hint);
+int lp32_profile_is_source(void);
 
 /* Always non-NULL after lp32_profile_select; before that a neutral profile
    with no patches is returned. */

@@ -263,6 +263,24 @@ static const struct lp32_game_profile portal2_profile = {
     .entry_eip = 0x00001cf0,
     .image_end = 0x0000335c,
     .main_address = 0x00001d60,
+    .thread_argument_is_direct = 1,
+    .callee_pops_struct_return = 1,
+    .steam_app_id = 620,
+    .source_data_directory = "Portal2",
+    .source_executable = "portal2_osx",
+    .source_game_directory = "portal2",
+};
+
+/* Binary fingerprint and ABI choices are populated after auditing the Mac depot. */
+static const struct lp32_game_profile l4d2_profile = {
+    .title = LP32_TITLE_L4D2,
+    .name = "L4D2",
+    .display_name = "Left 4 Dead 2",
+    .log_directory = "L4D2Compat",
+    .image_file = "L4D2.image",
+    .steam_app_id = 550,
+    .source_data_directory = "L4D2",
+    .source_game_directory = "left4dead2",
 };
 
 static const struct lp32_game_profile unknown_profile = {
@@ -277,6 +295,7 @@ static const struct lp32_game_profile *const known_profiles[] = {
     &pirates_profile,
     &clone_wars_profile,
     &portal2_profile,
+    &l4d2_profile,
 };
 
 static const struct lp32_game_profile *current_profile = &unknown_profile;
@@ -284,6 +303,12 @@ static const struct lp32_game_profile *current_profile = &unknown_profile;
 const struct lp32_game_profile *lp32_profile(void)
 {
     return current_profile;
+}
+
+int lp32_profile_is_source(void)
+{
+    return current_profile->title == LP32_TITLE_PORTAL2 ||
+           current_profile->title == LP32_TITLE_L4D2;
 }
 
 const struct lp32_game_profile *lp32_profile_named(const char *name)
