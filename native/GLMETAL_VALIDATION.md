@@ -4,6 +4,12 @@ The converter defaults to GLMetal again with the tested shader, command-stream,
 and upload fixes. GLMetal contains generic renderer changes. Sound Manager
 queue ownership and pause handling remain in the compatibility loader.
 
+The [October 14 shared runtime measurements](SHARED-RUNTIME-PERFORMANCE.md)
+cover per-control once initialization and generic vertex layout reuse. The
+final vertex changes passed 150 Apple GL comparisons on each architecture.
+The isolated alternating-format benchmark improved about 14%; gameplay FPS
+and elimination of area-transition stutters remain unproven.
+
 ## MW3 steady-state index publication
 
 The [render performance investigation](MW3_RENDER_PERFORMANCE.md) found

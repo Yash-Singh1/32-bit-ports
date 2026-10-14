@@ -29,6 +29,7 @@
 #include "objc_bridge.h"
 #include "cxx_exception_bridge.h"
 #include "name_match.h"
+#include "guest_once.h"
 
 #include <architecture/i386/table.h>
 #include <CoreFoundation/CoreFoundation.h>
@@ -2915,32 +2916,21 @@ static int guest_vscan_consumed(const char *input, const char *format,
     return assigned;
 }
 
-/*
- * pthread_once over guest control blocks.  The i386 pthread_once_t is an
- * opaque 8-byte block; only its address matters here.  A host mutex guards
- * the table and the initializer runs on the calling guest thread.
- */
+/* Per-control synchronization preserves the Darwin i386 signature word. */
+static bool guest_once_thread_exiting(void);
+
+static int guest_once_initialize(void *opaque)
+{
+    compat_runtime32_call((uint32_t)(uintptr_t)opaque, NULL, 0);
+    return last_call_trapped || guest_once_thread_exiting() ? ECANCELED : 0;
+}
+
 static int guest_pthread_once(uint32_t control, uint32_t initializer)
 {
-    static pthread_mutex_t once_lock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
-    static uint32_t completed[256];
-    static uint32_t completed_count;
-    if (!control || !initializer) return EINVAL;
-    pthread_mutex_lock(&once_lock);
-    for (uint32_t index = 0; index < completed_count; ++index) {
-        if (completed[index] == control) {
-            pthread_mutex_unlock(&once_lock);
-            return 0;
-        }
-    }
-    if (completed_count < sizeof(completed) / sizeof(completed[0])) {
-        completed[completed_count++] = control;
-    }
-    /* Holding the (recursive) lock across the initializer serialises
-       concurrent first callers the way pthread_once does. */
-    compat_runtime32_call(initializer, NULL, 0);
-    pthread_mutex_unlock(&once_lock);
-    return 0;
+    if (!initializer) return EINVAL;
+    return guest_once_run((struct guest_once_control *)(uintptr_t)control,
+                          guest_once_initialize,
+                          (void *)(uintptr_t)initializer);
 }
 
 /*
@@ -3114,6 +3104,12 @@ uint64_t compat_runtime32_return_double(double value) { return return_guest_doub
 /* Set by the guest's pthread_exit, which leaves guest code like a trapped
    import does; run_guest_thread then finishes the host thread normally. */
 static _Thread_local bool guest_thread_started, guest_thread_exiting;
+
+static bool guest_once_thread_exiting(void)
+{
+    return guest_thread_exiting;
+}
+
 static _Thread_local uint32_t guest_thread_exit_value;
 
 static void *run_guest_thread(void *opaque)
@@ -4090,6 +4086,12 @@ static uint64_t fast_moddi3(const uint32_t *a, uint32_t caller)
     return (uint64_t)(dividend % divisor);
 }
 
+static uint64_t fast_pthread_once(const uint32_t *arguments, uint32_t caller)
+{
+    (void)caller;
+    return (uint32_t)guest_pthread_once(arguments[0], arguments[1]);
+}
+
 static lp32_fast_import_fn runtime_fast_import(const char *name)
 {
     static const struct {
@@ -4114,6 +4116,7 @@ static lp32_fast_import_fn runtime_fast_import(const char *name)
         {"_strncpy", fast_strncpy},
         {"___tolower", fast_tolower},
         {"_pthread_self", fast_pthread_self},
+        {"_pthread_once", fast_pthread_once},
         {"_inflate", zlib_bridge32_inflate},
         {"_deflate", zlib_bridge32_deflate},
         {"_logf", fast_logf},
@@ -7688,8 +7691,55 @@ static uint32_t sync_self_test_free_list_length(struct host_sync_free_node *node
     return length;
 }
 
+static int guest_once_abi_self_test(void)
+{
+    uint32_t cells = guest_allocate(32, true);
+    uint32_t allocation = guest_allocate(8192, true);
+    if (!cells || !allocation) return -1;
+    uint32_t address = (allocation + 4095) & ~UINT32_C(4095);
+    uint8_t *code = (void *)(uintptr_t)address;
+    if (mprotect(code, 4096, PROT_READ | PROT_WRITE | PROT_EXEC)) return -1;
+    struct guest_once_control *control = (void *)(uintptr_t)cells;
+    uint32_t *count = (void *)(uintptr_t)(cells + 8);
+    *control = (struct guest_once_control){ .signature = 0x30b1bcba };
+    /* i386 callback: increment the guest counter and return. */
+    uint8_t initializer[] = {0xff, 0x05, 0, 0, 0, 0, 0xc3};
+    uint32_t counter = cells + 8;
+    memcpy(initializer + 2, &counter, 4);
+    memcpy(code + 64, initializer, sizeof(initializer));
+    /* Align the stack, push initializer/control, and call the import thunk. */
+    uint8_t caller[] = {0x83, 0xec, 0x04, 0x68, 0, 0, 0, 0,
+                       0x68, 0, 0, 0, 0, 0xe8, 0, 0, 0, 0,
+                       0x83, 0xc4, 0x0c, 0xc3};
+    uint32_t initialize = address + 64;
+    uint32_t thunk = compat_runtime32_guest_callback("_pthread_once");
+    int32_t relative = (int32_t)(thunk - (address + 18));
+    memcpy(caller + 4, &initialize, 4);
+    memcpy(caller + 9, &cells, 4);
+    memcpy(caller + 14, &relative, 4);
+    memcpy(code, caller, sizeof(caller));
+    bool valid = true;
+    for (unsigned generation = 0; generation < 2; ++generation) {
+        if (generation) *control = (struct guest_once_control){ .signature = 0x30b1bcba };
+        for (unsigned call = 0; call < 3; ++call) {
+            uint32_t result = compat_runtime32_call(address, NULL, 0);
+            valid &= !last_call_trapped && result == 0 && *count == generation + 1 &&
+                     control->signature == 0x30b1bcba && control->state == UINT32_MAX;
+        }
+    }
+    /* Completed controls still reject a missing initializer in either route. */
+    uint32_t invalid[] = {cells, 0};
+    valid &= fast_pthread_once(invalid, 0) == EINVAL &&
+             compat_runtime32_dispatch_import("_pthread_once", invalid) == EINVAL;
+    guest_deallocate(allocation);
+    guest_deallocate(cells);
+    fprintf(stderr, "guest-once-abi-selftest: %s\n", valid ? "PASS" : "FAIL");
+    return valid ? 0 : -1;
+}
+
 int compat_runtime32_run_sync_self_test(void)
 {
+    if (getenv("LP32_ONCE_SELFTEST")) return guest_once_abi_self_test();
     if (getenv("LP32_IMPORT_BENCH")) {  /* TEMPORARY: import round-trip cost */
         uint32_t block = compat_runtime32_allocate(8192, 1);
         uint32_t code = (block + 4095) & ~4095u;

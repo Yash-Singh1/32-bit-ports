@@ -218,6 +218,13 @@ OpenGL contexts, instead of allocating a permanent handle on every query.
 `make -C native test-pointer-proxy` checks concurrent queries, context switching,
 and resource lifetime without launching a game.
 
+Guest `pthread_once` now synchronizes each control independently and publishes
+completion in its i386 control word. Completed calls avoid the old global
+mutex and 256-entry scan. Run `make -C native test-guest-once test-guest-once-abi`
+for concurrency, retry, storage reuse and real i386 import checks. See the
+[shared runtime measurements](native/SHARED-RUNTIME-PERFORMANCE.md) for the
+generic GLMetal vertex-cache changes and the limits of the gameplay comparison.
+
 The recorder uses fixed memory and a background log writer, with no screenshot
 capture or GPU readback. Its timestamps use the Mach uptime clock directly,
 with nanosecond conversion checked against `CLOCK_UPTIME_RAW` in the tests.
