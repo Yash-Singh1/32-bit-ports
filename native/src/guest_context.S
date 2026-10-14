@@ -101,5 +101,25 @@ _lp32_context_lower_table:
     .long 0
 6:
     ret
+/* Generic pure atomic imports. Locked instructions retain seq_cst ordering
+   with host atomics, while EDX matches the host bridge's zero high word. */
+.globl _lp32_context_atomic_add32, _lp32_context_atomic_cas32
+_lp32_context_atomic_add32:
+    movl 4(%esp), %edx
+    movl %edx, %eax
+    movl 8(%esp), %ecx
+    lock xaddl %eax, (%ecx)
+    addl %edx, %eax
+    xorl %edx, %edx
+    ret
+_lp32_context_atomic_cas32:
+    movl 4(%esp), %eax
+    movl 8(%esp), %ecx
+    movl 12(%esp), %edx
+    lock cmpxchgl %ecx, (%edx)
+    sete %al
+    movzbl %al, %eax
+    xorl %edx, %edx
+    ret
 _lp32_context_end:
 .code64

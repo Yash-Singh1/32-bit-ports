@@ -656,3 +656,7 @@ benchmark-guest-once: $(BUILD_DIR)/benchmark_guest_once
 .PHONY: test-guest-once-abi
 test-guest-once-abi: $(BUILD_DIR)/game_loader
 	python3 tests/test_guest_once_abi.py
+
+.PHONY: test-pure-atomic
+test-pure-atomic: $(BUILD_DIR)/game_loader
+	python3 tests/test_pure_atomic.py

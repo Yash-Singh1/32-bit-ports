@@ -54,6 +54,31 @@ int main(void)
     assert(hitch_classify("_pthread_self") == HITCH_COUNTED_RUNTIME);
     assert(hitch_classify("_malloc") == HITCH_RUNTIME);
     assert(hitch_classify("_free") == HITCH_RUNTIME);
+    const char *const cheap_helpers[] = {
+        "_pthread_getspecific", "_logf", "_expf", "_floorf", "_ceilf", "_acosf",
+        "_asinf", "_sinf", "_cosf", "_atanf", "_roundf", "_powf", "_atan2f", "_fmodf",
+        "_floor", "_ceil", "_sin", "_cos", "_pow", "_atan2", "_fmod",
+        "___udivdi3", "___umoddi3", "___divdi3", "___moddi3",
+        "_OSAtomicCompareAndSwap32", "_OSAtomicCompareAndSwapInt",
+        "_OSAtomicCompareAndSwap32Barrier", "_OSAtomicCompareAndSwapPtrBarrier",
+        "_OSAtomicCompareAndSwap64", "_OSAtomicCompareAndSwap64Barrier",
+        "_OSAtomicAdd64", "_pthread_mutex_trylock",
+    };
+    for (unsigned i = 0; i < sizeof(cheap_helpers) / sizeof(cheap_helpers[0]); ++i)
+        assert(hitch_classify(cheap_helpers[i]) == HITCH_COUNTED_RUNTIME);
+    assert(hitch_classify("__tlv_get_addr") == HITCH_RUNTIME);
+    assert(hitch_classify("_pthread_once") == HITCH_RUNTIME);
+    assert(hitch_classify("_pthread_mutex_unlock") == HITCH_RUNTIME);
+    assert(hitch_classify("_nanosleep$UNIX2003") == HITCH_WAIT);
+    assert(hitch_classify("_usleep$UNIX2003") == HITCH_WAIT);
+    assert(hitch_classify("_OSAtomicAdd32Barrier") == HITCH_COUNTED_RUNTIME);
+    assert(setenv("LP32_TRACE_ATOMIC", "0x1234", 1) == 0);
+    assert(hitch_classify("_OSAtomicAdd32Barrier") == HITCH_RUNTIME);
+    assert(unsetenv("LP32_TRACE_ATOMIC") == 0);
+    assert(hitch_classify("_mach_absolute_time") == HITCH_COUNTED_RUNTIME);
+    assert(setenv("LP32_TRACE_TIMING", "1", 1) == 0);
+    assert(hitch_classify("_mach_absolute_time") == HITCH_RUNTIME);
+    assert(unsetenv("LP32_TRACE_TIMING") == 0);
     assert(!hitch_recorder_enabled);
     char path[128];
     snprintf(path, sizeof(path), "/tmp/lp32-hitch-test-%ld.log", (long)getpid());
@@ -61,6 +86,9 @@ int main(void)
     const char *full = getenv("LP32_HITCH_FULL_IMPORTS");
     assert(!!hitch_full_imports == !!(full && full[0] && strcmp(full, "0")));
     assert(hitch_classify("_strlen") == (hitch_full_imports ? HITCH_RUNTIME : HITCH_COUNTED_RUNTIME));
+    for (unsigned i = 0; i < sizeof(cheap_helpers) / sizeof(cheap_helpers[0]); ++i)
+        assert(hitch_classify(cheap_helpers[i]) ==
+               (hitch_full_imports ? HITCH_RUNTIME : HITCH_COUNTED_RUNTIME));
     assert(hitch_classify("_pthread_mutex_lock") == HITCH_WAIT);
     /* Startup itself presents once before Backend takes over. Its later
        imports and a scope spanning that handoff must not pollute Backend. */
@@ -100,7 +128,13 @@ int main(void)
     assert(strstr(text, "draw=1/40.000"));
     assert(strstr(text, " counted_runtime=17\n"));
     assert(!strstr(text, " counted_runtime=18\n"));
-    assert(strstr(text, "glstate=1/6.000 objc=0/0.000 runtime=1/4.000"));
+    assert(strstr(text, hitch_full_imports ?
+                  "glstate=65/70.000 objc=0/0.000 runtime=1/4.000" :
+                  "glstate=65/8.000 objc=0/0.000 runtime=1/4.000"));
+    assert(strstr(text, hitch_full_imports ?
+                  "glstate_sampled_calls=65 glstate_sampled_ms=70.000" :
+                  "glstate_sampled_calls=3 glstate_sampled_ms=8.000"));
+    assert(strstr(text, hitch_full_imports ? "glstate_every=1;" : "glstate_every=32;"));
     assert(!strstr(text, "objc=1/"));
     assert(!strstr(text, "name=presentation"));
     assert(strstr(text, "host model="));
@@ -149,10 +183,26 @@ static void *presenter(void *unused)
     pthread_mutex_unlock(&rendezvous);
     for (int i = 0; i < 17; ++i) hitch_count_runtime();
     struct hitch_scope outer, inner, presentation;
+    assert(hitch_sample_gl_state());
     hitch_scope_begin(&outer, end);
+    outer.counted = true;
     hitch_scope_begin(&inner, end + 2000000);
     hitch_scope_end(&inner, HITCH_RUNTIME, "nested", 0, end + 6000000, 0);
     hitch_scope_end(&outer, HITCH_GL_STATE, "outer", 0, end + 10000000, 0);
+    /* State counts include skipped samples, while durations include only
+       sampled scopes. The outer scope above still excludes its nested child. */
+    unsigned sampled = 0;
+    for (unsigned i = 0; i < 64; ++i) {
+        if (hitch_sample_gl_state()) {
+            struct hitch_scope state;
+            hitch_scope_begin(&state, end);
+            state.counted = true;
+            hitch_scope_end(&state, HITCH_GL_STATE, "sampled-state", 0,
+                            end + 1000000, 0);
+            ++sampled;
+        }
+    }
+    assert(sampled == (hitch_full_imports ? 64 : 2));
     hitch_program(0x8620, 17); hitch_program(0x8804, 28);
     hitch_note(HITCH_DRAW, "glDrawRangeElements", 0xabcdef, end, end + 40000000, 600);
     hitch_scope_begin(&presentation, end);
@@ -176,5 +226,19 @@ static void *presenter(void *unused)
         hitch_scope_end(&scope, HITCH_RUNTIME, "benchmark", 0, hitch_now(), 0);
     }
     printf("recorder exclusive-call overhead: %.0f ns/call\n", (hitch_now() - before) / 100000.0);
+    before = hitch_now();
+    unsigned samples = 0;
+    for (unsigned i = 0; i < 100000; ++i) {
+        if (hitch_sample_gl_state()) {
+            struct hitch_scope state;
+            hitch_scope_begin(&state, hitch_now());
+            state.counted = true;
+            hitch_scope_end(&state, HITCH_GL_STATE, "gl-state-benchmark", 0,
+                            hitch_now(), 0);
+            ++samples;
+        }
+    }
+    printf("recorder GL state overhead: %.0f ns/call, %u/100000 timed\n",
+           (hitch_now() - before) / 100000.0, samples);
     return NULL;
 }

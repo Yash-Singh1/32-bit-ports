@@ -10,6 +10,7 @@ struct hitch_scope {
     uint64_t start, children, generation;
     struct hitch_scope *parent;
     uint64_t ownership_generation;
+    bool counted;
 };
 extern int hitch_recorder_enabled;
 extern int hitch_full_imports;
@@ -28,6 +29,9 @@ void hitch_note(unsigned kind, const char *name, uint32_t caller,
 /* Pure, frequent runtime calls still contribute to the frame's call count.
    Their cost remains in work time without taking two clocks per invocation. */
 void hitch_count_runtime(void);
+/* Count every GL state import, but time one of every 32 by default.
+   Full-import mode times every call. Set scope.counted for sampled scopes. */
+bool hitch_sample_gl_state(void);
 /* Called once per presented frame, after pacing. Durations are CPU wall time. */
 void hitch_frame(uint64_t swap, uint64_t work_end, uint64_t flush_end,
                  uint64_t present_end, uint64_t target_ns, bool active);

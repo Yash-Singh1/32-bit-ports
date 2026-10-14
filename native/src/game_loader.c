@@ -1056,6 +1056,11 @@ int main(int argc, char **argv)
         macho_image32_unload(&image);
         return EXIT_FAILURE;
     }
+    if (getenv("LP32_PURE_ATOMIC_SELFTEST")) {
+        int result = compat_runtime32_run_pure_atomic_self_test();
+        macho_image32_unload(&image);
+        return result ? EXIT_FAILURE : EXIT_SUCCESS;
+    }
     if (getenv("LP32_ONCE_SELFTEST")) {
         int result = compat_runtime32_run_sync_self_test();
         macho_image32_unload(&image);

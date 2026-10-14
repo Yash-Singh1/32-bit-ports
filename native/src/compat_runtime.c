@@ -58,6 +58,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <sched.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -76,6 +77,7 @@ extern const uint8_t lp32_context_start[], lp32_context_end[];
 extern const uint8_t lp32_context_setjmp[], lp32_context_fast_setjmp[], lp32_context_sigsetjmp[];
 extern const uint8_t lp32_context_longjmp[], lp32_context_fast_longjmp[];
 extern const uint8_t lp32_context_save_helper[], lp32_context_restore_helper[];
+extern const uint8_t lp32_context_atomic_add32[], lp32_context_atomic_cas32[];
 extern const uint8_t lp32_context_strcmp[], lp32_context_tolower[], lp32_context_lower_table[];
 static uint32_t guest_context_symbol(const char *name);
 
@@ -1381,6 +1383,24 @@ static void update_guest_lowercase_table(void)
     for (unsigned i = 0; i < 256; ++i) table[i] = (uint32_t)tolower((unsigned char)i);
 }
 
+static uint32_t pure_import_symbol(const char *name)
+{
+    const char *full = getenv("LP32_HITCH_FULL_IMPORTS");
+    if (getenv("LP32_NO_PURE_IMPORTS") || getenv("LP32_NO_FAST_IMPORTS") || getenv("LP32_GUEST_LOCK") ||
+        getenv("LP32_FRAME_STATS") || getenv("LP32_TRACE_ATOMIC") ||
+        (full && full[0] && strcmp(full, "0"))) return 0;
+    const uint8_t *entry = NULL;
+    if (!strcmp(name, "_OSAtomicAdd32") || !strcmp(name, "_OSAtomicAdd32Barrier"))
+        entry = lp32_context_atomic_add32;
+    else if (!strcmp(name, "_OSAtomicCompareAndSwap32") ||
+             !strcmp(name, "_OSAtomicCompareAndSwapInt") ||
+             !strcmp(name, "_OSAtomicCompareAndSwap32Barrier") ||
+             !strcmp(name, "_OSAtomicCompareAndSwapPtrBarrier"))
+        entry = lp32_context_atomic_cas32;
+    return entry ? kBridgeCodeBase + kGuestContextOffset +
+                   (uint32_t)(entry - lp32_context_start) : 0;
+}
+
 static int build_transition_bridge(void)
 {
     uint8_t *code = (void *)(uintptr_t)kBridgeCodeBase;
@@ -1457,7 +1477,8 @@ static int build_transition_bridge(void)
                 (index - kInlineImportCapacity) * kImportThunkSize :
             (uint8_t *)(uintptr_t)kExtendedImportBase +
                 (index - kInlineImportCapacity - kOverflowImportCapacity) * kImportThunkSize;
-        uint32_t context = guest_context_symbol(import->name);
+        uint32_t context = pure_import_symbol(import->name);
+        if (!context) context = guest_context_symbol(import->name);
         if (context) {
             thunk = (void *)(uintptr_t)context;
         } else if (import->target) {
@@ -1583,7 +1604,8 @@ static uint32_t guest_context_symbol(const char *name)
 
 static uint32_t guest_thunk_for_dynamic_symbol(const char *name)
 {
-    uint32_t context = guest_context_symbol(name);
+    uint32_t context = pure_import_symbol(name);
+    if (!context) context = guest_context_symbol(name);
     if (context) return context;
     for (uint32_t index = 0; index < dynamic_symbol_count; ++index) {
         if (strcmp(dynamic_symbol_names[index], name) == 0) {
@@ -3511,6 +3533,9 @@ const struct guest_resume_context *lp32_take_resume_context(void)
     return &pending_resume;
 }
 
+static uint64_t fast_pthread_mutex_trylock(const uint32_t *arguments,
+                                           uint32_t return_address);
+
 uint64_t lp32_dispatch_import(uint32_t import_id, const uint32_t *arguments,
                               uint32_t return_address,
                               const uint64_t *saved_registers)
@@ -3532,10 +3557,19 @@ uint64_t lp32_dispatch_import(uint32_t import_id, const uint32_t *arguments,
                 __atomic_store_n(kind, hitch_kind, __ATOMIC_RELAXED);
             }
         }
+        /* Keep cold dispatch and lazy host mutex allocation visible. The
+           cached trylock operation itself never waits for another owner. */
+        if (hitch_kind == HITCH_COUNTED_RUNTIME &&
+            ((uintptr_t)fast <= 1 ||
+             (fast == fast_pthread_mutex_trylock &&
+              !guest_mutex_map_find(arguments[0]))))
+            hitch_kind = HITCH_RUNTIME;
         if (hitch_kind == HITCH_COUNTED_RUNTIME) hitch_count_runtime();
-        if (hitch_kind >= HITCH_DRAW) {
+        bool timed = hitch_kind != HITCH_GL_STATE || hitch_sample_gl_state();
+        if (hitch_kind >= HITCH_DRAW && timed) {
             hitch_name = import_name_for_id(import_id);
             hitch_scope_begin(&hitch_scope, hitch_now());
+            hitch_scope.counted = hitch_kind == HITCH_GL_STATE;
         }
     }
     if (!compat_runtime32_frame_profile_enabled) {
@@ -3809,27 +3843,8 @@ static void hot_mutex_report(void)
     memset(hot_mutexes, 0, sizeof(hot_mutexes));
 }
 
-/* MW2/MW3 hold the D3D device lock for microseconds at a time, while several
-   threads poll it. Blocking on every contended acquire turns each handoff
-   into a sleep and wakeup, which stalls the loading thread. Spin briefly
-   first. LP32_NO_MUTEX_SPIN disables it. */
-static int lock_with_brief_spin(pthread_mutex_t *mutex)
-{
-    static int enabled = -1;
-    if (enabled < 0)
-        enabled = lp32_title_is_mw_sdl(lp32_profile()->title) && !getenv("LP32_NO_MUTEX_SPIN");
-    if (enabled && pthread_mutex_trylock(mutex) != 0) {
-        uint64_t deadline = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + 16000;
-        do {
-            for (unsigned i = 0; i < 32; ++i) __builtin_ia32_pause();
-            if (pthread_mutex_trylock(mutex) == 0) return 0;
-        } while (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) < deadline);
-    } else if (enabled) {
-        return 0;
-    }
-    return pthread_mutex_lock(mutex);
-}
-
+/* Darwin handles the contended handoff. A custom pause/clock polling loop
+ * under Rosetta consumes CPU on every waiter and can starve the lock owner. */
 static uint64_t fast_pthread_mutex_lock(const uint32_t *arguments,
                                         uint32_t return_address)
 {
@@ -3841,7 +3856,7 @@ static uint64_t fast_pthread_mutex_lock(const uint32_t *arguments,
         uint32_t slot = (arguments[0] >> 3) % 4096;
         uint64_t start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
         bool contended = pthread_mutex_trylock(mutex) != 0;
-        int status = contended ? lock_with_brief_spin(mutex) : 0;
+        int status = contended ? pthread_mutex_lock(mutex) : 0;
         hot_mutexes[slot].mutex = arguments[0];
         ++hot_mutexes[slot].calls;
         if (contended) {
@@ -3860,7 +3875,7 @@ static uint64_t fast_pthread_mutex_lock(const uint32_t *arguments,
         if (now - last_report > 10000000000ull) { last_report = now; hot_mutex_report(); }
         return (uint32_t)status;
     }
-    int status = lock_with_brief_spin(mutex);
+    int status = pthread_mutex_lock(mutex);
     const struct lp32_render_pool *pool = lp32_profile()->render_pool;
     if (!pool) return (uint32_t)status;
     if (return_address == pool->return_address &&
@@ -7689,6 +7704,97 @@ static uint32_t sync_self_test_free_list_length(struct host_sync_free_node *node
         node = node->next;
     }
     return length;
+}
+
+struct pure_atomic_test_job {
+    uint32_t cells, iterations;
+    bool publish;
+    int failure;
+};
+
+static void *pure_atomic_test_host(void *opaque)
+{
+    struct pure_atomic_test_job *job = opaque;
+    uint32_t *cells = (void *)(uintptr_t)job->cells;
+    if (!job->publish) {
+        for (uint32_t i = 0; i < job->iterations; ++i)
+            __atomic_add_fetch(cells, 1, __ATOMIC_SEQ_CST);
+        return NULL;
+    }
+    uint64_t deadline = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + UINT64_C(10000000000);
+    for (uint32_t i = 1; i <= job->iterations; ++i) {
+        while (__atomic_load_n(cells, __ATOMIC_SEQ_CST) != 0) {
+            if (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) > deadline) {
+                job->failure = 1;
+                return NULL;
+            }
+            sched_yield();
+        }
+        cells[1] = i;
+        __atomic_store_n(cells, 1, __ATOMIC_SEQ_CST);
+    }
+    return NULL;
+}
+
+int compat_runtime32_run_pure_atomic_self_test(void)
+{
+    uint32_t abi = macho_image32_find_symbol(current_image, "_atomic_abi");
+    uint32_t loop = macho_image32_find_symbol(current_image, "_atomic_add_loop");
+    uint32_t pointer = macho_image32_find_symbol(current_image, "_atomic_pointer");
+    uint32_t consume = macho_image32_find_symbol(current_image, "_atomic_consume");
+    uint32_t cells = guest_allocate(128, true);
+    if (!abi || !loop || !pointer || !consume || !cells) return -1;
+    uint32_t *values = (void *)(uintptr_t)cells;
+    uint32_t args[] = {cells, 50000};
+    bool valid = compat_runtime32_call(abi, args, 1) == 0 && !last_call_trapped;
+    const char *const aliases[] = {
+        "_OSAtomicAdd32", "_OSAtomicAdd32Barrier",
+        "_OSAtomicCompareAndSwap32", "_OSAtomicCompareAndSwapInt",
+        "_OSAtomicCompareAndSwap32Barrier", "_OSAtomicCompareAndSwapPtrBarrier",
+    };
+    for (unsigned i = 0; i < sizeof(aliases) / sizeof(aliases[0]); ++i) {
+        uint32_t callback = compat_runtime32_guest_callback(aliases[i]);
+        strcpy((char *)(uintptr_t)(cells + 64), aliases[i] + 1);
+        uint32_t lookup[] = {UINT32_C(0xfffffffe), cells + 64};
+        valid &= compat_runtime32_dispatch_import("_dlsym", lookup) == callback;
+        valid &= callback != 0 && compat_runtime32_resolve_symbol(aliases[i], 0) == callback;
+        uint32_t call_args[] = {0, cells, 0};
+        if (i >= 2) { call_args[0] = 7; call_args[1] = 7; call_args[2] = cells; }
+        valid &= compat_runtime32_call(callback, call_args, i < 2 ? 2 : 3) == (i < 2 ? 7 : 1) &&
+                 !last_call_trapped;
+    }
+    uint32_t bound = compat_runtime32_call(pointer, NULL, 0);
+    valid &= bound != 0;
+    uint32_t pointer_args[] = {0, cells};
+    valid &= compat_runtime32_call(bound, pointer_args, 2) == 7 && !last_call_trapped;
+    if (pure_import_symbol("_OSAtomicAdd32"))
+        valid &= bound == compat_runtime32_guest_callback("_OSAtomicAdd32");
+    values[0] = 0;
+    struct pure_atomic_test_job job = {cells, args[1], false, 0};
+    pthread_t host;
+    if (pthread_create(&host, NULL, pure_atomic_test_host, &job)) return -1;
+    compat_runtime32_call(loop, args, 2);
+    valid &= !last_call_trapped;
+    pthread_join(host, NULL);
+    valid &= values[0] == 2 * args[1];
+    memset(values, 0, 32);
+    args[1] = 2000;
+    job = (struct pure_atomic_test_job){cells, args[1], true, 0};
+    if (pthread_create(&host, NULL, pure_atomic_test_host, &job)) return -1;
+    valid &= compat_runtime32_call(consume, args, 2) == 0 && !last_call_trapped;
+    pthread_join(host, NULL);
+    valid &= !job.failure && values[0] == 0 && values[1] == args[1] && values[2] == 0;
+    values[0] = 0;
+    args[1] = 1000000;
+    uint64_t start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    compat_runtime32_call(loop, args, 2);
+    uint64_t elapsed = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - start;
+    valid &= !last_call_trapped && values[0] == args[1];
+    fprintf(stderr, "pure-atomic-selftest: %s, route=%s, actual i386 Add32 %.1f ns/call\n",
+            valid ? "PASS" : "FAIL", pure_import_symbol("_OSAtomicAdd32") ? "inline" : "gateway",
+            (double)elapsed / args[1]);
+    guest_deallocate(cells);
+    return valid ? 0 : -1;
 }
 
 static int guest_once_abi_self_test(void)

@@ -24,6 +24,7 @@ struct frame {
     uint64_t swap, end, work, flush, pace, present;
     uint64_t counted_runtime;
     uint64_t count[HITCH_KIND_COUNT], ns[HITCH_KIND_COUNT];
+    uint64_t gl_state_samples;
     struct event top[TOP];
     bool active;
 };
@@ -53,6 +54,7 @@ static uint64_t previous_end, last_trigger, threshold_ns;
 static _Thread_local uint32_t vertex_program, fragment_program;
 static _Thread_local struct hitch_scope *active_scope;
 static _Thread_local uint64_t frame_generation;
+static _Thread_local unsigned gl_state_sequence;
 static bool is_current_presenter(void)
 {
     return presenter_token && presenter_token == __atomic_load_n(&owner_token, __ATOMIC_ACQUIRE);
@@ -85,6 +87,29 @@ unsigned hitch_classify(const char *name)
         !strcmp(name, "memmove") || !strcmp(name, "memset") ||
         !strcmp(name, "__tolower") || !strcmp(name, "pthread_self"))
         return hitch_full_imports ? HITCH_RUNTIME : HITCH_COUNTED_RUNTIME;
+    /* These direct handlers only read thread-local state or compute scalar
+       arithmetic. TLS resolver calls can allocate and run constructors, so
+       they deliberately retain full timings. */
+    static const char *const cheap_helpers[] = {
+        "pthread_getspecific", "logf", "expf", "floorf", "ceilf", "acosf",
+        "asinf", "sinf", "cosf", "atanf", "roundf", "powf", "atan2f", "fmodf",
+        "floor", "ceil", "sin", "cos", "pow", "atan2", "fmod",
+        "__udivdi3", "__umoddi3", "__divdi3", "__moddi3",
+        "OSAtomicCompareAndSwap32", "OSAtomicCompareAndSwapInt",
+        "OSAtomicCompareAndSwap32Barrier", "OSAtomicCompareAndSwapPtrBarrier",
+        "OSAtomicCompareAndSwap64", "OSAtomicCompareAndSwap64Barrier",
+        "OSAtomicAdd64", "pthread_mutex_trylock",
+    };
+    for (unsigned i = 0; i < sizeof(cheap_helpers) / sizeof(cheap_helpers[0]); ++i)
+        if (!strcmp(name, cheap_helpers[i]))
+            return hitch_full_imports ? HITCH_RUNTIME : HITCH_COUNTED_RUNTIME;
+    /* Atomic-add tracing performs file I/O. Its cold parser also remains
+       timed because the import dispatcher times every uncached handler. */
+    if ((!strcmp(name, "OSAtomicAdd32") || !strcmp(name, "OSAtomicAdd32Barrier")) &&
+        !getenv("LP32_TRACE_ATOMIC"))
+        return hitch_full_imports ? HITCH_RUNTIME : HITCH_COUNTED_RUNTIME;
+    if (!strcmp(name, "mach_absolute_time") && !getenv("LP32_TRACE_TIMING"))
+        return hitch_full_imports ? HITCH_RUNTIME : HITCH_COUNTED_RUNTIME;
     /* Steam RemoteStorage uses generated C++ vtable thunks rather than libc
      * file imports, so include these in I/O attribution too. */
     if (!strncmp(name, "lp32_steam_4_", 13)) return HITCH_IO;
@@ -111,7 +136,8 @@ unsigned hitch_classify(const char *name)
         !strcmp(name, "glFinish") || !strcmp(name, "glFlush") ||
         strstr(name, "WaitSync") || !strcmp(name, "MPWaitOnSemaphore") ||
         !strcmp(name, "MPWaitOnQueue") || !strcmp(name, "MPDelayUntil") ||
-        !strcmp(name, "usleep") || !strcmp(name, "nanosleep")) return HITCH_WAIT;
+        !strcmp(name, "usleep") || !strncmp(name, "usleep$", 7) ||
+        !strcmp(name, "nanosleep") || !strncmp(name, "nanosleep$", 10)) return HITCH_WAIT;
     if (!strncmp(name, "AudioQueue", 10) || !strncmp(name, "AudioUnit", 9) ||
         !strncmp(name, "AudioConverter", 14) ||
         !strncmp(name, "AudioFile", 9) || !strncmp(name, "ExtAudioFile", 12) ||
@@ -138,6 +164,8 @@ static void write_report(const struct report *r)
         static const char *names[] = {"unknown", "none", "counted_runtime", "draw", "upload", "shader", "io", "wait", "audio", "glstate", "objc", "runtime"};
         for (unsigned k = HITCH_DRAW; k < HITCH_KIND_COUNT; ++k)
             fprintf(output, " %s=%llu/%.3f", names[k], (unsigned long long)f->count[k], f->ns[k] / 1e6);
+        fprintf(output, " glstate_sampled_calls=%llu glstate_sampled_ms=%.3f",
+                (unsigned long long)f->gl_state_samples, f->ns[HITCH_GL_STATE] / 1e6);
         fprintf(output, " counted_runtime=%llu\n", (unsigned long long)f->counted_runtime);
         for (unsigned j = 0; j < TOP; ++j)
             if (f->top[j].name) write_event("call", &f->top[j]);
@@ -199,19 +227,22 @@ int hitch_start(const char *path, double threshold_ms)
     following = reports = skipped = 0;
     previous_end = last_trigger = 0;
     stopping = queued = false;
+    gl_state_sequence = 0;
     __atomic_add_fetch(&ownership_generation, 1, __ATOMIC_ACQ_REL);
     /* Startup may run on the application thread while a guest Backend
        thread presents. Ownership is established at the first presentation. */
     __atomic_store_n(&owner_token, 0, __ATOMIC_RELEASE);
     const char *full = getenv("LP32_HITCH_FULL_IMPORTS");
     hitch_full_imports = full && full[0] && strcmp(full, "0");
-    fprintf(output, "hitch-recorder v3 pid=%ld wall=%lld monotonic=%.3f threshold_ms=%.3f history=%d after=%d limit=%d full_imports=%d\n"
+    fprintf(output, "hitch-recorder v4 pid=%ld wall=%lld monotonic=%.3f threshold_ms=%.3f history=%d after=%d limit=%d full_imports=%d\n"
         "CPU wall timings only; draw time can include driver compilation or waiting, not GPU execution time.\n"
         "Category values are call-count/exclusive-ms. Work includes untimed guest work and gateway overhead; flush excludes pacing.\n"
-        "Nested imports are excluded from parent timings; calls spanning presentation are omitted.\n",
+        "Timed nested imports are excluded from parent timings; calls spanning presentation are omitted.\n",
         (long)getpid(), (long long)time(NULL), hitch_now() / 1e9, threshold_ns / 1e6,
         HISTORY, AFTER, REPORT_LIMIT, hitch_full_imports);
-    fprintf(output, "counted_runtime contains untimed libc/string/thread-ID calls; their time remains in work and any enclosing timed import.\n");
+    fprintf(output, "glstate_every=%u; glstate count includes every call, its ms and glstate_sampled_ms cover only glstate_sampled_calls, without extrapolation. Untimed state calls remain in work and enclosing timed scopes. Full-import mode times every GL state call.\n", hitch_full_imports ? 1 : 32);
+    fprintf(output, "counted_runtime contains untimed libc/string/thread-ID/scalar-math/TLS-value/atomic/cached-trylock calls; their time remains in work and any enclosing timed import.\n");
+    fprintf(output, "Inline i386 atomic helpers bypass import/category counters; LP32_NO_PURE_IMPORTS=1 restores gateway accounting, and full-import/profiling/atomic-trace modes select the gateway automatically.\n");
     char host[768]; lp32_host_description(host, sizeof(host));
     fprintf(output, "%s\n", host);
     fflush(output);
@@ -241,10 +272,14 @@ void hitch_program(uint32_t target, uint32_t program)
     if (target == 0x8620) vertex_program = program;
     if (target == 0x8804) fragment_program = program;
 }
+static void note_import(unsigned kind, const char *name, uint32_t caller,
+                        uint64_t start, uint64_t end, uint32_t count,
+                        bool count_call);
+
 void hitch_scope_begin(struct hitch_scope *scope, uint64_t now)
 {
     *scope = (struct hitch_scope){now, 0, frame_generation, active_scope,
-        __atomic_load_n(&ownership_generation, __ATOMIC_ACQUIRE)};
+        __atomic_load_n(&ownership_generation, __ATOMIC_ACQUIRE), false};
     active_scope = scope;
 }
 void hitch_scope_end(struct hitch_scope *scope, unsigned kind, const char *name,
@@ -256,10 +291,12 @@ void hitch_scope_end(struct hitch_scope *scope, unsigned kind, const char *name,
     if (scope->generation != frame_generation || scope->ownership_generation !=
         __atomic_load_n(&ownership_generation, __ATOMIC_ACQUIRE)) return;
     uint64_t exclusive = elapsed > scope->children ? elapsed - scope->children : 0;
-    hitch_note(kind, name, caller, scope->start, scope->start + exclusive, count);
+    note_import(kind, name, caller, scope->start, scope->start + exclusive, count,
+                !scope->counted);
 }
-void hitch_note(unsigned kind, const char *name, uint32_t caller,
-                uint64_t start, uint64_t end, uint32_t draw_count)
+static void note_import(unsigned kind, const char *name, uint32_t caller,
+                        uint64_t start, uint64_t end, uint32_t draw_count,
+                        bool count_call)
 {
     if (!hitch_recorder_enabled || kind < HITCH_DRAW || kind >= HITCH_KIND_COUNT) return;
     uint64_t ns = end - start;
@@ -272,7 +309,9 @@ void hitch_note(unsigned kind, const char *name, uint32_t caller,
         pthread_mutex_unlock(&mutex);
         return;
     }
-    ++current.count[kind]; current.ns[kind] += ns;
+    if (count_call) ++current.count[kind];
+    current.ns[kind] += ns;
+    if (kind == HITCH_GL_STATE) ++current.gl_state_samples;
     for (unsigned i = 0; i < TOP; ++i) {
         if (ns > current.top[i].ns) {
             for (unsigned j = TOP - 1; j > i; --j) current.top[j] = current.top[j - 1];
@@ -280,6 +319,19 @@ void hitch_note(unsigned kind, const char *name, uint32_t caller,
         }
     }
 }
+void hitch_note(unsigned kind, const char *name, uint32_t caller,
+                uint64_t start, uint64_t end, uint32_t draw_count)
+{
+    note_import(kind, name, caller, start, end, draw_count, true);
+}
+
+bool hitch_sample_gl_state(void)
+{
+    if (!hitch_recorder_enabled) return false;
+    if (is_current_presenter()) ++current.count[HITCH_GL_STATE];
+    return hitch_full_imports || !(gl_state_sequence++ & 31);
+}
+
 void hitch_count_runtime(void)
 {
     if (hitch_recorder_enabled && is_current_presenter()) ++current.counted_runtime;
@@ -333,5 +385,6 @@ void hitch_frame(uint64_t swap, uint64_t work_end, uint64_t flush_end,
     if (history_count < HISTORY) ++history_count;
     previous_end = present_end;
     memset(&current, 0, sizeof(current));
+    gl_state_sequence = 0;
     pthread_mutex_unlock(&presentation_mutex);
 }
