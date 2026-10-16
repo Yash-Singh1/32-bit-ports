@@ -8,6 +8,7 @@
 #include <mach/mach_vm.h>
 #include <mach/vm_region.h>
 #include <mach/vm_prot.h>
+#include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
 #include <mach/i386/thread_status.h>
@@ -26,15 +27,16 @@ struct source_file {
 
 /*
  * The __LEGACY zerofill in address_space_reserve.S pins the whole low 2 GiB.
- * Only the pages the image actually occupies are released here; everything
- * else in the reservation is carved with MAP_FIXED by the runtime (guest heap
+ * Replace image pages directly with MAP_FIXED; never release the reservation
+ * first. Otherwise stdio, malloc, or another host thread can allocate in the
+ * hole between segment mappings and be overwritten by a later MAP_FIXED.
+ * Everything else in the reservation is carved by the runtime (guest heap
  * above max(0x02000000, image end), stacks and bridge pages at 0x7c000000+), so the image must
  * end below the heap base.
  */
 enum {
     kLegacyReservationStart = 0x00001000,
     kLegacyReservationEnd = 0x10000000,
-    kLegacyPageSize = 0x1000,
 };
 
 static int fail_message(const char *message)
@@ -81,8 +83,33 @@ static bool range_inside(size_t offset, size_t length, size_t container_size)
     return offset <= container_size && length <= container_size - offset;
 }
 
-static int verify_address_hole(uint32_t start, uint32_t end)
+static int verify_legacy_reservation(uint32_t start, uint32_t end)
 {
+    /* Check the actual loaded host segment before replacing any pages. A
+       loader linked without address_space_reserve.S must fail safely. */
+    const struct mach_header_64 *host =
+        (const void *)_dyld_get_image_header(0);
+    if (!host || host->magic != MH_MAGIC_64 ||
+        start < kLegacyReservationStart || end <= start ||
+        end > kLegacyReservationEnd) {
+        return fail_message("host legacy-address reservation does not cover image");
+    }
+    const struct load_command *command = (const void *)(host + 1);
+    bool reserved = false;
+    for (uint32_t index = 0; index < host->ncmds; ++index) {
+        if (command->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64 *segment = (const void *)command;
+            if (!strncmp(segment->segname, "__LEGACY", 16) &&
+                segment->vmaddr == kLegacyReservationStart &&
+                segment->vmsize >= end - kLegacyReservationStart &&
+                _dyld_get_image_vmaddr_slide(0) == 0) reserved = true;
+        }
+        command = (const void *)((const uint8_t *)command + command->cmdsize);
+    }
+    if (!reserved) {
+        return fail_message("host is missing its fixed legacy-address reservation");
+    }
+
     mach_vm_address_t address = start;
     mach_vm_size_t size = 0;
     vm_region_basic_info_data_64_t info;
@@ -95,30 +122,14 @@ static int verify_address_hole(uint32_t start, uint32_t end)
     if (object_name != MACH_PORT_NULL) {
         mach_port_deallocate(mach_task_self(), object_name);
     }
-    if (result != KERN_SUCCESS && result != KERN_INVALID_ADDRESS) {
+    if (result != KERN_SUCCESS) {
         fprintf(stderr, "game_loader: mach_vm_region failed: %s\n",
                 mach_error_string(result));
         return -1;
     }
-    if (result == KERN_SUCCESS && address < end) {
-        fprintf(stderr,
-                "game_loader: legacy range 0x%08" PRIx32 "-0x%08" PRIx32
-                " conflicts with mapping at 0x%016llx-0x%016llx\n",
-                start, end, address, address + size);
-        return -1;
-    }
-    return 0;
-}
-
-static int release_legacy_reservation(uint32_t image_start, uint32_t image_end)
-{
-    uintptr_t reservation = kLegacyReservationStart;
-    uint32_t release_end = (image_end + kLegacyPageSize - 1) & ~(uint32_t)(kLegacyPageSize - 1);
-    if (image_start < kLegacyReservationStart || release_end > kLegacyReservationEnd) {
-        return fail_message("host legacy-address reservation does not cover image");
-    }
-    if (munmap((void *)reservation, release_end - kLegacyReservationStart) != 0) {
-        return fail_errno("munmap host legacy-address reservation");
+    if (address > start || size < end - address ||
+        !(info.protection & VM_PROT_WRITE)) {
+        return fail_message("host legacy-address reservation is not intact");
     }
     return 0;
 }
@@ -428,9 +439,8 @@ int macho_image32_load(const char *path, struct macho_image32 *image)
 
     int result = inspect_commands(&source, image);
     if (result == 0) {
-        result = release_legacy_reservation(image->min_address, image->max_address);
+        result = verify_legacy_reservation(image->min_address, image->max_address);
     }
-    if (result == 0) result = verify_address_hole(image->min_address, image->max_address);
     if (result == 0) result = map_segments(&source, image);
     if (result == 0) result = collect_imports(image);
 

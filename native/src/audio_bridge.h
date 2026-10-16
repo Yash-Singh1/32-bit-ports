@@ -6,6 +6,10 @@
 int audio_bridge32_dispatch(const char *import_name, const uint32_t *arguments,
                             uint64_t *result);
 
+/* Writes the recent graph/unit call history to fd; called from the crash
+   handler, so it takes no locks. */
+void audio_bridge32_write_crash_report(int fd);
+
 /* Pre-opened graph pool counters for frame statistics. */
 void audio_bridge32_pool_statistics(uint64_t *hits, uint64_t *misses);
 

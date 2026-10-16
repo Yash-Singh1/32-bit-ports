@@ -278,6 +278,22 @@ $(BUILD_DIR)/test_macho_entry: tests/test_macho_entry.c src/macho_loader.c src/m
 test-macho-entry: $(BUILD_DIR)/test_macho_entry
 	./$(BUILD_DIR)/test_macho_entry
 
+$(BUILD_DIR)/test_macho_mapping: tests/test_macho_mapping.c src/macho_loader.c src/macho_loader.h src/address_space_reserve.S | $(BUILD_DIR)
+	$(CLANG) $(CFLAGS) $(LDFLAGS) tests/test_macho_mapping.c src/address_space_reserve.S -o $@
+	codesign --force --sign - $@
+
+$(BUILD_DIR)/test_macho_missing_reservation: tests/test_macho_mapping.c src/macho_loader.c src/macho_loader.h | $(BUILD_DIR)
+	$(CLANG) $(CFLAGS) -Wl,-no_pie,-pagezero_size,0x1000,-segaddr,__TEXT,0x100000000 tests/test_macho_mapping.c -o $@
+	codesign --force --sign - $@
+
+.PHONY: test-macho-mapping test-crash-diagnostics
+test-macho-mapping: $(BUILD_DIR)/test_macho_mapping $(BUILD_DIR)/test_macho_missing_reservation
+	arch -x86_64 ./$(BUILD_DIR)/test_macho_mapping
+	arch -x86_64 ./$(BUILD_DIR)/test_macho_missing_reservation missing
+
+test-crash-diagnostics: $(BUILD_DIR)/game_loader
+	python3 tests/test_crash_diagnostics.py $(BUILD_DIR)/game_loader
+
 .PHONY: test-objc-proxy
 test-objc-proxy: $(BUILD_DIR)/game_loader
 	env LP32_OBJC_PROXY_SELFTEST=1 LP32_NO_DIAGNOSTIC_LOG=1 arch -x86_64 ./$(BUILD_DIR)/game_loader

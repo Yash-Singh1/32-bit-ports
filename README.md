@@ -84,3 +84,8 @@ Add `CONTINUE_WHEN_INACTIVE=1` to `bundle` or `promote-loader` to keep the game
 running while another app is active. It defaults to `0`. To save a personal
 build preference, put `CONTINUE_WHEN_INACTIVE = 1` in the git-ignored
 `native/local.mk`.
+
+Startup diagnostics are saved to `~/Library/Logs/LP32Compat/startup.log`
+before the game image loads. After loading, the session log is in the game's
+log directory, such as `~/Library/Logs/LEGOCloneWarsCompat/last-run.log`.
+Include these logs when reporting a launch failure.

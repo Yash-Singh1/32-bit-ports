@@ -10,6 +10,8 @@
 #include "hitch_recorder.h"
 #include "host_diagnostics.h"
 #include "steam_bridge.h"
+#include "audio_bridge.h"
+#include "crash_output.h"
 
 #include <errno.h>
 #include <dirent.h>
@@ -20,6 +22,7 @@
 #include <mach/mach_vm.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <libproc.h>
 #include <limits.h>
 #include <math.h>
 #include <mach-o/dyld.h>
@@ -38,6 +41,11 @@ static volatile sig_atomic_t guest_breakpoint_count;
 static unsigned guest_breakpoint_limit;
 static unsigned guest_breakpoint_skip;
 static int guest_diagnostic_fd = -1;
+static unsigned guest_crash_active;
+static int guest_trace_native_crash;
+static struct { uint32_t address; unsigned count; } guest_crash_dumps[16];
+static unsigned guest_crash_dump_count;
+static unsigned char guest_signal_stack[128 * 1024] __attribute__((aligned(16)));
 
 /* Finder launches do not retain stderr.  Mirror crash and breakpoint output
    into a persistent per-run file without changing normal console logging. */
@@ -48,6 +56,12 @@ static int guest_diagnostic_fd = -1;
             dprintf(guest_diagnostic_fd, __VA_ARGS__);                     \
         }                                                                  \
     } while (0)
+
+#define CRASH_DIAGNOSTIC(...) do { \
+    if (guest_diagnostic_fd >= 0) \
+        lp32_crash_writef(guest_diagnostic_fd, __VA_ARGS__); \
+    lp32_crash_writef(STDERR_FILENO, __VA_ARGS__); \
+} while (0)
 
 static void flush_guest_instruction(uintptr_t address);
 
@@ -132,7 +146,7 @@ static void start_saga_data_prefetch(void)
     pthread_attr_destroy(&attributes);
 }
 
-static void open_guest_diagnostic_log(const char *executable_path)
+static void open_guest_diagnostic_log(const char *executable_path, bool startup)
 {
     /* A read-only storage probe must not truncate a player's session log. */
     if (getenv("LP32_STEAM_STORAGE_PROBE") || getenv("LP32_NO_DIAGNOSTIC_LOG")) return;
@@ -143,22 +157,24 @@ static void open_guest_diagnostic_log(const char *executable_path)
     char path[PATH_MAX];
     int length = snprintf(directory, sizeof(directory),
                           "%s/Library/Logs/%s", home,
-                          lp32_profile()->log_directory);
+                          startup ? "LP32Compat" : lp32_profile()->log_directory);
     if (length < 0 || (size_t)length >= sizeof(directory)) return;
     if (mkdir(directory, 0700) != 0 && errno != EEXIST) {
         perror("compat32: create diagnostic log directory");
         return;
     }
-    length = snprintf(path, sizeof(path), "%s/last-run.log", directory);
+    length = snprintf(path, sizeof(path), "%s/%s.log", directory,
+                      startup ? "startup" : "last-run");
     if (length < 0 || (size_t)length >= sizeof(path)) return;
 
+    if (guest_diagnostic_fd >= 0) close(guest_diagnostic_fd);
     guest_diagnostic_fd = open(path,
         O_WRONLY | O_CREAT | O_TRUNC | O_APPEND, 0600);
     if (guest_diagnostic_fd < 0) {
         perror("compat32: open diagnostic log");
         return;
     }
-    dprintf(guest_diagnostic_fd,
+    lp32_crash_writef(guest_diagnostic_fd,
             "compat32: diagnostic session pid=%ld executable=%s\n",
             (long)getpid(), executable_path ? executable_path : "(unknown)");
     fprintf(stderr, "compat32: persistent diagnostic log: %s\n", path);
@@ -167,7 +183,7 @@ static void open_guest_diagnostic_log(const char *executable_path)
        bridge message a user's run would need to be diagnosed; keep them in
        the session log instead.  Terminal launches keep their stderr. */
     struct stat stderr_stat, null_stat;
-    if (fstat(STDERR_FILENO, &stderr_stat) == 0 &&
+    if (!startup && fstat(STDERR_FILENO, &stderr_stat) == 0 &&
         stat("/dev/null", &null_stat) == 0 &&
         stderr_stat.st_dev == null_stat.st_dev &&
         stderr_stat.st_ino == null_stat.st_ino) {
@@ -629,6 +645,164 @@ static void flush_guest_instruction(uintptr_t address)
     __builtin___clear_cache((char *)address, (char *)(address + 1));
 }
 
+static const char *vm_tag_name(unsigned tag)
+{
+    switch (tag) {
+    case 0: return "untagged";
+    case VM_MEMORY_MALLOC: return "malloc";
+    case VM_MEMORY_MALLOC_SMALL: return "malloc-small";
+    case VM_MEMORY_MALLOC_LARGE: return "malloc-large";
+    case VM_MEMORY_MALLOC_HUGE: return "malloc-huge";
+    case VM_MEMORY_MALLOC_TINY: return "malloc-tiny";
+    case VM_MEMORY_MALLOC_LARGE_REUSABLE: return "malloc-large-reusable";
+    case VM_MEMORY_MALLOC_LARGE_REUSED: return "malloc-large-reused";
+    case VM_MEMORY_MALLOC_NANO: return "malloc-nano";
+    case VM_MEMORY_MALLOC_MEDIUM: return "malloc-medium";
+    case VM_MEMORY_MACH_MSG: return "mach-msg";
+    case VM_MEMORY_IOKIT: return "iokit";
+    case VM_MEMORY_STACK: return "stack";
+    case VM_MEMORY_GUARD: return "guard";
+    case VM_MEMORY_SHARED_PMAP: return "shared-cache";
+    case VM_MEMORY_DYLIB: return "dylib";
+    case VM_MEMORY_APPKIT: return "appkit";
+    case VM_MEMORY_FOUNDATION: return "foundation";
+    case VM_MEMORY_COREGRAPHICS: return "coregraphics";
+    case VM_MEMORY_LAYERKIT: return "coreanimation";
+    case VM_MEMORY_DYLD: return "dyld";
+    case VM_MEMORY_DYLD_MALLOC: return "dyld-malloc";
+    case VM_MEMORY_GLSL: return "glsl";
+    case VM_MEMORY_OS_ALLOC_ONCE: return "os-alloc-once";
+    case VM_MEMORY_LIBDISPATCH: return "libdispatch";
+    case VM_MEMORY_IOSURFACE: return "iosurface";
+    case VM_MEMORY_AUDIO: return "audio";
+    case VM_MEMORY_IOACCELERATOR: return "ioaccelerator";
+    case VM_MEMORY_COLORSYNC: return "colorsync";
+    case VM_MEMORY_ROSETTA: return "rosetta";
+    case VM_MEMORY_ROSETTA_THREAD_CONTEXT: return "rosetta-thread-context";
+    case VM_MEMORY_ROSETTA_EXECUTABLE_HEAP: return "rosetta-executable-heap";
+    case VM_MEMORY_ROSETTA_ARENA: return "rosetta-arena";
+    default: return "?";
+    }
+}
+
+/* Finds the region containing address; false if it is unmapped. */
+static bool crash_region_at(mach_vm_address_t address, mach_vm_address_t *start,
+                            mach_vm_size_t *size,
+                            vm_region_extended_info_data_t *region)
+{
+    mach_msg_type_number_t count = VM_REGION_EXTENDED_INFO_COUNT;
+    mach_port_t object = MACH_PORT_NULL;
+    *start = address;
+    kern_return_t result = mach_vm_region(mach_task_self(), start, size,
+        VM_REGION_EXTENDED_INFO, (vm_region_info_t)region, &count, &object);
+    if (object != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), object);
+    return result == KERN_SUCCESS && *start <= address;
+}
+
+static void crash_print_region(const char *label, const char *relation,
+                               mach_vm_address_t start, mach_vm_size_t size,
+                               const vm_region_extended_info_data_t *region)
+{
+    char path[PATH_MAX] = "";
+    proc_regionfilename(getpid(), start, path, sizeof(path));
+    CRASH_DIAGNOSTIC(
+        "compat32: crash region %s %s [0x%llx-0x%llx) prot=%c%c%c "
+        "tag=%u(%s) share=%u%s%s\n",
+        label, relation, (unsigned long long)start,
+        (unsigned long long)(start + size),
+        region->protection & VM_PROT_READ ? 'r' : '-',
+        region->protection & VM_PROT_WRITE ? 'w' : '-',
+        region->protection & VM_PROT_EXECUTE ? 'x' : '-',
+        region->user_tag, vm_tag_name(region->user_tag), region->share_mode,
+        path[0] ? " " : "", path);
+}
+
+/*
+ * Heap corruption is usually detected far from the write that caused it, so
+ * for each pointer-like value name the mapping it points into, the mapping
+ * just below it (the likely source of an overrun into a region's first
+ * bytes), and dump the surrounding writable memory.
+ */
+static void crash_describe_address(const char *label, uint64_t value, bool dump)
+{
+    if (value < 0x10000 || value >= UINT64_C(0x800000000000)) return;
+    mach_vm_address_t start;
+    mach_vm_size_t size;
+    vm_region_extended_info_data_t region;
+    if (!crash_region_at(value, &start, &size, &region)) {
+        CRASH_DIAGNOSTIC("compat32: crash region %s=0x%llx unmapped\n",
+                         label, (unsigned long long)value);
+        return;
+    }
+    char relation[64];
+    lp32_crash_format(relation, sizeof(relation), "=0x%llx +0x%llx in",
+             (unsigned long long)value, (unsigned long long)(value - start));
+    crash_print_region(label, relation, start, size, &region);
+    mach_vm_address_t below_start;
+    mach_vm_size_t below_size;
+    vm_region_extended_info_data_t below;
+    if (start > 0 && crash_region_at(start - 1, &below_start, &below_size, &below)) {
+        crash_print_region(label, "below", below_start, below_size, &below);
+    }
+    if (!dump || !(region.protection & VM_PROT_WRITE) ||
+        region.user_tag == VM_MEMORY_STACK) return;
+    mach_vm_address_t line = (value & ~(mach_vm_address_t)15) - 48;
+    for (unsigned index = 0; index < 7; ++index, line += 16) {
+        uint64_t words[2];
+        mach_vm_size_t count = 0;
+        if (mach_vm_read_overwrite(mach_task_self(), line, sizeof(words),
+                                   (mach_vm_address_t)words, &count) ||
+            count != sizeof(words)) {
+            CRASH_DIAGNOSTIC("compat32: crash mem %s 0x%llx: unreadable\n",
+                             label, (unsigned long long)line);
+            continue;
+        }
+        CRASH_DIAGNOSTIC("compat32: crash mem %s 0x%llx: %016llx %016llx\n",
+                         label, (unsigned long long)line,
+                         (unsigned long long)words[0],
+                         (unsigned long long)words[1]);
+    }
+}
+
+static void crash_describe_state(siginfo_t *info, const ucontext_t *context)
+{
+    mach_port_t thread = mach_thread_self();
+    CRASH_DIAGNOSTIC("compat32: crash thread port=%u\n", thread);
+    mach_port_deallocate(mach_task_self(), thread);
+    const __typeof__(context->uc_mcontext->__ss) *state = &context->uc_mcontext->__ss;
+    CRASH_DIAGNOSTIC(
+        "compat32: crash r8=%016llx r9=%016llx r10=%016llx r11=%016llx "
+        "r12=%016llx r13=%016llx r15=%016llx rflags=%016llx\n",
+        state->__r8, state->__r9, state->__r10, state->__r11, state->__r12,
+        state->__r13, state->__r15, state->__rflags);
+    const struct { const char *name; uint64_t value; bool dump; } values[] = {
+        {"fault", (uint64_t)(uintptr_t)info->si_addr, true},
+        {"rip", state->__rip, false},
+        {"rsp", state->__rsp, false},
+        {"rax", state->__rax, true}, {"rbx", state->__rbx, true},
+        {"rcx", state->__rcx, true}, {"rdx", state->__rdx, true},
+        {"rsi", state->__rsi, true}, {"rdi", state->__rdi, true},
+        {"rbp", state->__rbp, false}, {"r8", state->__r8, true},
+        {"r9", state->__r9, true}, {"r10", state->__r10, true},
+        {"r11", state->__r11, true}, {"r12", state->__r12, true},
+        {"r13", state->__r13, true}, {"r14", state->__r14, true},
+        {"r15", state->__r15, true},
+    };
+    const size_t value_count = sizeof(values) / sizeof(values[0]);
+    for (size_t index = 0; index < value_count; ++index) {
+        bool repeated = false;
+        for (size_t earlier = 0; earlier < index && !repeated; ++earlier) {
+            repeated = values[earlier].value == values[index].value;
+        }
+        if (!repeated) {
+            crash_describe_address(values[index].name, values[index].value,
+                                   values[index].dump);
+        }
+    }
+    audio_bridge32_write_crash_report(STDERR_FILENO);
+    if (guest_diagnostic_fd >= 0) audio_bridge32_write_crash_report(guest_diagnostic_fd);
+}
+
 static void guest_crash_diagnostic(int signal_number, siginfo_t *info,
                                    void *opaque_context)
 {
@@ -647,7 +821,7 @@ static void guest_crash_diagnostic(int signal_number, siginfo_t *info,
             unsigned count = ++guest_breakpoint_count;
             const uint32_t *words = (const void *)(uintptr_t)rsp;
             if (count > guest_breakpoint_skip) {
-            GUEST_DIAGNOSTIC(
+            CRASH_DIAGNOSTIC(
                     "compat32: guest breakpoint 0x%08llx hit %u "
                     "eax=%08llx ebx=%08llx ecx=%08llx edx=%08llx "
                     "esi=%08llx edi=%08llx ebp=%08llx esp=%08llx\n",
@@ -662,7 +836,7 @@ static void guest_crash_diagnostic(int signal_number, siginfo_t *info,
                     rsp & UINT32_MAX);
             if (rsp >= UINT32_C(0x1000) && rsp < UINT32_C(0x80000000)) {
                 for (unsigned index = 0; index < 12; ++index) {
-                    GUEST_DIAGNOSTIC(
+                    CRASH_DIAGNOSTIC(
                             "compat32: breakpoint stack[%u]=0x%08x\n",
                             index, words[index]);
                 }
@@ -677,7 +851,7 @@ static void guest_crash_diagnostic(int signal_number, siginfo_t *info,
                     const uint32_t *object =
                         (const void *)(uintptr_t)words[dump_argument];
                     for (unsigned index = 0; index < 24; ++index) {
-                        GUEST_DIAGNOSTIC(
+                        CRASH_DIAGNOSTIC(
                                 "compat32: breakpoint arg%u+0x%02x=0x%08x\n",
                                 dump_argument, index * 4, object[index]);
                     }
@@ -691,7 +865,7 @@ static void guest_crash_diagnostic(int signal_number, siginfo_t *info,
                         dump_address < UINT32_C(0x80000000)) {
                         const uint32_t *dump = (const void *)dump_address;
                         for (unsigned index = 0; index < 16; ++index) {
-                            GUEST_DIAGNOSTIC(
+                            CRASH_DIAGNOSTIC(
                                     "compat32: breakpoint mem[%08llx]=0x%08x\n",
                                     (unsigned long long)(dump_address + index * 4),
                                     dump[index]);
@@ -701,7 +875,7 @@ static void guest_crash_diagnostic(int signal_number, siginfo_t *info,
                             indirect < UINT32_C(0x80000000)) {
                             const uint32_t *object = (const void *)indirect;
                             for (unsigned index = 0; index < 32; ++index) {
-                                GUEST_DIAGNOSTIC(
+                                CRASH_DIAGNOSTIC(
                                         "compat32: breakpoint indirect[%08llx]="
                                         "0x%08x\n",
                                         (unsigned long long)(indirect + index * 4),
@@ -717,7 +891,7 @@ static void guest_crash_diagnostic(int signal_number, siginfo_t *info,
                         dump_address < UINT32_C(0x80000000)) {
                         const uint32_t *dump = (const void *)dump_address;
                         for (unsigned index = 0; index < 20; ++index) {
-                            GUEST_DIAGNOSTIC(
+                            CRASH_DIAGNOSTIC(
                                     "compat32: breakpoint esi+0x%02x="
                                     "0x%08x\n",
                                     index * 4, dump[index]);
@@ -737,21 +911,34 @@ static void guest_crash_diagnostic(int signal_number, siginfo_t *info,
             return;
         }
     }
-    GUEST_DIAGNOSTIC(
+    /* A second fault must terminate, and a blocked output fd or optional
+       symbol lookup must not leave a dead game consuming CPU indefinitely. */
+    if (__atomic_exchange_n(&guest_crash_active, 1, __ATOMIC_RELAXED))
+        _exit(128 + signal_number);
+    struct sigaction timeout = {0};
+    timeout.sa_handler = SIG_DFL;
+    sigemptyset(&timeout.sa_mask);
+    sigaction(SIGALRM, &timeout, NULL);
+    sigset_t unblocked;
+    sigemptyset(&unblocked);
+    sigaddset(&unblocked, SIGALRM);
+    sigprocmask(SIG_UNBLOCK, &unblocked, NULL);
+    alarm(2);
+    CRASH_DIAGNOSTIC(
             "compat32: signal %d code=%d address=%p "
             "rip=0x%016llx rsp=0x%016llx\n",
             signal_number, info->si_code, info->si_addr, rip, rsp);
     if (rip > UINT32_MAX) {
         uintptr_t address = rip, frame = context->uc_mcontext->__ss.__rbp;
         for (unsigned i = 0; i < 16; ++i) {
-            GUEST_DIAGNOSTIC("compat32: native return[%u]=0x%016llx\n",
+            CRASH_DIAGNOSTIC("compat32: native return[%u]=0x%016llx\n",
                             i, (unsigned long long)address);
             /* Symbol lookup can acquire dyld locks. Keep it opt-in; the
                bounded raw frame walk is sufficient for offline symbolication. */
-            if (getenv("LP32_TRACE_NATIVE_CRASH")) {
+            if (guest_trace_native_crash) {
             Dl_info symbol = {0};
             dladdr((void *)address, &symbol);
-            GUEST_DIAGNOSTIC("compat32: native frame %u %p %s + %llu (%s)\n", i,
+            CRASH_DIAGNOSTIC("compat32: native frame %u %p %s + %llu (%s)\n", i,
                 (void *)address, symbol.dli_sname ? symbol.dli_sname : "?",
                 (unsigned long long)(address - (uintptr_t)symbol.dli_saddr),
                 symbol.dli_fname ? symbol.dli_fname : "?");
@@ -766,11 +953,11 @@ static void guest_crash_diagnostic(int signal_number, siginfo_t *info,
     }
     uint32_t mode_to64 = 0, mode_to32 = 0;
     compat_runtime32_mode_guard_counts(&mode_to64, &mode_to32);
-    GUEST_DIAGNOSTIC(
+    CRASH_DIAGNOSTIC(
             "compat32: crash cs=0x%llx mode-recoveries to64=%u to32=%u\n",
             (unsigned long long)context->uc_mcontext->__ss.__cs,
             mode_to64, mode_to32);
-    GUEST_DIAGNOSTIC(
+    CRASH_DIAGNOSTIC(
             "compat32: crash rax=%016llx rbx=%016llx rcx=%016llx "
             "rdx=%016llx rsi=%016llx rdi=%016llx rbp=%016llx r14=%016llx\n",
             context->uc_mcontext->__ss.__rax,
@@ -781,46 +968,60 @@ static void guest_crash_diagnostic(int signal_number, siginfo_t *info,
             context->uc_mcontext->__ss.__rdi,
             context->uc_mcontext->__ss.__rbp,
             context->uc_mcontext->__ss.__r14);
+    crash_describe_state(info, context);
     if (rsp >= UINT32_C(0x1000) && rsp < UINT32_C(0x80000000)) {
-        const uint32_t *words = (const void *)(uintptr_t)rsp;
-        for (unsigned index = 0; index < 16; ++index) {
-            GUEST_DIAGNOSTIC("compat32: crash stack[%u]=0x%08x\n",
-                             index, words[index]);
-        }
+        uint32_t words[16]; mach_vm_size_t count = 0;
+        if (mach_vm_read_overwrite(mach_task_self(), rsp, sizeof(words),
+                (mach_vm_address_t)words, &count) == KERN_SUCCESS) {
+            for (unsigned index = 0; index < count / sizeof(words[0]); ++index)
+                CRASH_DIAGNOSTIC("compat32: crash stack[%u]=0x%08x\n", index, words[index]);
+        } else CRASH_DIAGNOSTIC("compat32: crash stack unreadable\n");
     }
-    /* LP32_CRASH_DUMP=0xaddr:dwords[,...] appends guest cells to the report. */
-    const char *dump = getenv("LP32_CRASH_DUMP");
-    if (dump && dump[0]) {
-        char buffer[256];
-        strlcpy(buffer, dump, sizeof(buffer));
-        char *cursor = buffer;
-        for (char *item = strsep(&cursor, ","); item; item = strsep(&cursor, ",")) {
-            char *colon = strchr(item, ':');
-            uint32_t address = (uint32_t)strtoul(item, NULL, 0);
-            unsigned count = colon ? (unsigned)strtoul(colon + 1, NULL, 0) : 8;
-            if (address < 0x1000 || address >= 0x7f000000 || count > 64) continue;
-            const uint32_t *words = (const void *)(uintptr_t)address;
-            for (unsigned index = 0; index < count; ++index) {
-                GUEST_DIAGNOSTIC("compat32: crash mem[0x%08x]=0x%08x\n",
-                                 address + 4 * index, words[index]);
-            }
+    for (unsigned item = 0; item < guest_crash_dump_count; ++item) {
+        uint32_t words[64]; mach_vm_size_t count = 0;
+        uint32_t address = guest_crash_dumps[item].address;
+        if (mach_vm_read_overwrite(mach_task_self(), address,
+                guest_crash_dumps[item].count * sizeof(words[0]),
+                (mach_vm_address_t)words, &count) != KERN_SUCCESS) {
+            CRASH_DIAGNOSTIC("compat32: crash mem[0x%08x] unreadable\n", address);
+            continue;
         }
+        for (unsigned index = 0; index < count / sizeof(words[0]); ++index)
+            CRASH_DIAGNOSTIC("compat32: crash mem[0x%08x]=0x%08x\n",
+                             address + 4 * index, words[index]);
     }
-    fsync(guest_diagnostic_fd >= 0 ? guest_diagnostic_fd : STDERR_FILENO);
     _exit(128 + signal_number);
 }
 
 static void install_guest_crash_diagnostics(void)
 {
+    guest_trace_native_crash = getenv("LP32_TRACE_NATIVE_CRASH") != NULL;
+    const char *dump = getenv("LP32_CRASH_DUMP");
+    if (dump) {
+        char buffer[256];
+        strlcpy(buffer, dump, sizeof(buffer));
+        char *cursor = buffer;
+        for (char *item = strsep(&cursor, ","); item && guest_crash_dump_count < 16;
+             item = strsep(&cursor, ",")) {
+            char *colon = strchr(item, ':');
+            uint32_t address = (uint32_t)strtoul(item, NULL, 0);
+            unsigned count = colon ? (unsigned)strtoul(colon + 1, NULL, 0) : 8;
+            if (address < 0x1000 || address >= 0x7f000000 || count > 64) continue;
+            guest_crash_dumps[guest_crash_dump_count].address = address;
+            guest_crash_dumps[guest_crash_dump_count++].count = count;
+        }
+    }
+    stack_t stack = {.ss_sp = guest_signal_stack, .ss_size = sizeof(guest_signal_stack)};
+    sigaltstack(&stack, NULL);
     struct sigaction action;
     memset(&action, 0, sizeof(action));
     action.sa_sigaction = guest_crash_diagnostic;
-    action.sa_flags = SA_SIGINFO | SA_RESETHAND;
+    action.sa_flags = SA_SIGINFO | SA_RESETHAND | SA_ONSTACK;
     sigemptyset(&action.sa_mask);
     sigaction(SIGSEGV, &action, NULL);
     sigaction(SIGBUS, &action, NULL);
     sigaction(SIGILL, &action, NULL);
-    action.sa_flags = SA_SIGINFO;
+    action.sa_flags = SA_SIGINFO | SA_ONSTACK;
     sigaction(SIGTRAP, &action, NULL);
 }
 
@@ -893,6 +1094,12 @@ static const char *default_image_path(const char *argv0, char *buffer,
     return NULL;
 }
 
+__attribute__((noreturn, noinline)) static void crash_without_stack(void)
+{
+    __asm__ volatile("xorq %rsp, %rsp; ud2");
+    __builtin_unreachable();
+}
+
 int main(int argc, char **argv)
 {
     objc_bridge32_initialize_test_mode();
@@ -910,6 +1117,17 @@ int main(int argc, char **argv)
         return objc_bridge32_run_focus_self_test(expected) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
     if (getenv("LP32_CRASH_DIAGNOSTIC_SELFTEST")) {
+        const char *mode = getenv("LP32_CRASH_DIAGNOSTIC_SELFTEST");
+        if (!strcmp(mode, "stdio")) {
+            /* Fault inside libc output, as in the Sonoma CPU report. */
+            setvbuf(stdout, NULL, _IONBF, 0);
+            stdout->_write = NULL;
+            fprintf(stdout, "compat32: stdio crash self-test %d\n", argc);
+        } else if (!strcmp(mode, "stack")) {
+            crash_without_stack();
+        } else if (!strcmp(mode, "unmapped")) {
+            munmap((void *)0x1000, 4096);
+        }
         raise(SIGSEGV);
         return EXIT_FAILURE;
     }
@@ -935,15 +1153,18 @@ int main(int argc, char **argv)
 
     if (getenv("LP32_PAUSE_FOR_VMMAP")) sleep(30);
 
+    open_guest_diagnostic_log(argc > 0 ? argv[0] : NULL, true);
+    char host[768];
+    lp32_host_description(host, sizeof(host));
+    CRASH_DIAGNOSTIC("compat32: %s\n", host);
+    CRASH_DIAGNOSTIC("compat32: loading image %s\n", image_path);
     struct macho_image32 image;
     if (macho_image32_load(image_path, &image) != 0) return EXIT_FAILURE;
     if (lp32_profile_select(&image) != 0) {
         macho_image32_unload(&image);
         return EXIT_FAILURE;
     }
-    open_guest_diagnostic_log(argc > 0 ? argv[0] : NULL);
-    char host[768];
-    lp32_host_description(host, sizeof(host));
+    open_guest_diagnostic_log(argc > 0 ? argv[0] : NULL, false);
     GUEST_DIAGNOSTIC("compat32: %s\n", host);
     const struct mach_header_64 *loader_header =
         (const struct mach_header_64 *)_dyld_get_image_header(0);

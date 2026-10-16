@@ -1,4 +1,5 @@
 #include "audio_bridge.h"
+#include "crash_output.h"
 #include "audio_queue_bridge.h"
 #include "compat_runtime.h"
 #include "game_profile.h"
@@ -125,6 +126,58 @@ static bool audio_worker_available;
 static uint64_t monotonic_ns(void)
 {
     return clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+}
+
+/*
+ * The last graph/unit lifecycle calls, kept for the crash report.  CoreAudio
+ * corruption surfaces long after the call that caused it, so the report
+ * needs the recent history, including which thread issued each call and
+ * what the deferred worker was doing.  Writers claim a slot with one atomic
+ * add; a slot's sequence is published last, so the crash-time reader skips
+ * torn or overwritten entries.
+ */
+enum { kAudioOpHistory = 128 };
+
+struct audio_op_record {
+    uint64_t sequence;
+    uint64_t time_ns;
+    uint64_t thread_id;
+    const void *graph;
+    uint32_t handle;
+    uint32_t detail;
+    char phase; /* 'G' guest call, 'B'/'E' deferred worker begin/end */
+    char name[31];
+};
+
+static struct audio_op_record audio_op_history[kAudioOpHistory];
+static uint64_t audio_op_next;
+
+static void note_audio_op(char phase, const char *name, uint32_t handle,
+                          const void *graph, uint32_t detail)
+{
+    uint64_t sequence = __atomic_fetch_add(&audio_op_next, 1, __ATOMIC_RELAXED);
+    struct audio_op_record *record = &audio_op_history[sequence % kAudioOpHistory];
+    __atomic_store_n(&record->sequence, 0, __ATOMIC_RELEASE);
+    record->time_ns = monotonic_ns();
+    pthread_threadid_np(NULL, &record->thread_id);
+    record->graph = graph;
+    record->handle = handle;
+    record->detail = detail;
+    record->phase = phase;
+    strlcpy(record->name, name, sizeof(record->name));
+    __atomic_store_n(&record->sequence, sequence + 1, __ATOMIC_RELEASE);
+}
+
+/* Parameter writes are per-frame traffic and would flush the history. */
+static bool audio_op_is_recorded(const char *import_name)
+{
+    if (!strcmp(import_name, "_AudioUnitSetParameter")) return false;
+    return !strncmp(import_name, "_AU", 3) ||
+           !strcmp(import_name, "_NewAUGraph") ||
+           !strcmp(import_name, "_DisposeAUGraph") ||
+           !strncmp(import_name, "_AudioUnit", 10) ||
+           !strncmp(import_name, "_AudioDevice", 12) ||
+           !strncmp(import_name, "_AudioHardware", 14);
 }
 
 static bool trace_audio(void)
@@ -472,6 +525,10 @@ static uint32_t guest_handle_for_unit(AudioUnit unit, AUGraph owner_graph)
     pthread_mutex_lock(&audio_object_lock);
     for (uint32_t index = 0; index < unit_object_count; ++index) {
         if (unit_objects[index] == unit) {
+            /* CoreAudio may reuse a disposed unit's address for a unit of
+               another graph; lookups must drain that graph's work, not the
+               old one's. */
+            unit_owner_graphs[index] = owner_graph;
             pthread_mutex_unlock(&audio_object_lock);
             return kGuestUnitHandleBase + index * kGuestAudioHandleStride;
         }
@@ -492,6 +549,29 @@ static uint32_t guest_handle_for_unit(AudioUnit unit, AUGraph owner_graph)
     return kGuestUnitHandleBase + index * kGuestAudioHandleStride;
 }
 
+static void retire_guest_units_locked(AUGraph graph)
+{
+    for (uint32_t index = 0; index < unit_object_count; ++index) {
+        if (unit_owner_graphs[index] == graph) {
+            unit_objects[index] = NULL;
+            unit_owner_graphs[index] = NULL;
+        }
+    }
+}
+
+/*
+ * AUGraphClose disposes the graph's units while the graph itself lives on.
+ * Their guest handles must stop resolving at once: a later call through one
+ * would reach a freed AudioUnit, and CoreAudio may hand the same address to
+ * a unit of another graph whose pending Initialize the call would then race.
+ */
+static void retire_guest_units_for_graph(AUGraph graph)
+{
+    pthread_mutex_lock(&audio_object_lock);
+    retire_guest_units_locked(graph);
+    pthread_mutex_unlock(&audio_object_lock);
+}
+
 static void retire_guest_audio_objects(uint32_t graph_handle, AUGraph graph)
 {
     pthread_mutex_lock(&audio_object_lock);
@@ -503,12 +583,7 @@ static void retire_guest_audio_objects(uint32_t graph_handle, AUGraph graph)
             graph_objects[index] = NULL;
         }
     }
-    for (uint32_t index = 0; index < unit_object_count; ++index) {
-        if (unit_owner_graphs[index] == graph) {
-            unit_objects[index] = NULL;
-            unit_owner_graphs[index] = NULL;
-        }
-    }
+    retire_guest_units_locked(graph);
     pthread_mutex_unlock(&audio_object_lock);
 }
 
@@ -1219,8 +1294,13 @@ static void *deferred_graph_worker(void *opaque)
         pthread_mutex_unlock(&deferred_graph_lock);
 
         uint64_t started_ns = monotonic_ns();
+        const char *kind_name = deferred_graph_kind_name(op->kind);
+        note_audio_op('B', kind_name, 0, op->graph,
+                      (uint32_t)((started_ns - op->enqueued_ns) / 1000));
         perform_graph_op(op);
         uint64_t finished_ns = monotonic_ns();
+        note_audio_op('E', kind_name, 0, op->graph,
+                      (uint32_t)((finished_ns - started_ns) / 1000));
 
         pthread_mutex_lock(&deferred_graph_lock);
         uint64_t wait_ns = started_ns - op->enqueued_ns;
@@ -1337,6 +1417,39 @@ void audio_bridge32_worker_statistics(struct audio_bridge32_worker_stats *stats)
     stats->hold_episodes = __atomic_exchange_n(&hold_episodes, 0, __ATOMIC_RELAXED);
     stats->hold_ms = __atomic_exchange_n(&hold_total_ns, 0, __ATOMIC_RELAXED) / 1e6;
     stats->hold_renders = __atomic_exchange_n(&hold_renders, 0, __ATOMIC_RELAXED);
+}
+
+/* Runs in the crash handler: no locks, only reads that tolerate racing. */
+void audio_bridge32_write_crash_report(int fd)
+{
+    uint64_t next = __atomic_load_n(&audio_op_next, __ATOMIC_ACQUIRE);
+    if (!next) return;
+    uint64_t now = monotonic_ns();
+    uint64_t first = next > kAudioOpHistory ? next - kAudioOpHistory : 0;
+    lp32_crash_writef(fd, "compat32: crash audio history: %llu calls, last %llu "
+                "(G=guest call, B/E=deferred worker begin/end; "
+                "B detail=queue wait us, E detail=run us)\n",
+            (unsigned long long)next, (unsigned long long)(next - first));
+    for (uint64_t sequence = first; sequence < next; ++sequence) {
+        const struct audio_op_record *record =
+            &audio_op_history[sequence % kAudioOpHistory];
+        if (__atomic_load_n(&record->sequence, __ATOMIC_ACQUIRE) != sequence + 1) {
+            continue;
+        }
+        lp32_crash_writef(fd, "compat32: crash audio -%lluus tid=%llu %c %-24s "
+                    "handle=0x%08x graph=%p detail=%u\n",
+                (unsigned long long)((now - record->time_ns) / 1000),
+                (unsigned long long)record->thread_id, record->phase,
+                record->name, record->handle, record->graph, record->detail);
+    }
+    AUGraph in_progress = deferred_graph_in_progress;
+    lp32_crash_writef(fd, "compat32: crash audio worker in_progress=%s graph=%p "
+                "queued=%u outstanding=%d callbacks=%u\n",
+            in_progress ? deferred_graph_kind_name(deferred_graph_in_progress_kind) :
+                          "none",
+            (void *)in_progress, deferred_queue_depth,
+            __atomic_load_n(&deferred_graph_outstanding, __ATOMIC_RELAXED),
+            __atomic_load_n(&audio_callback_count, __ATOMIC_RELAXED));
 }
 
 static void enqueue_graph_teardown(AUGraph graph, enum deferred_graph_kind kind,
@@ -1695,6 +1808,11 @@ int audio_bridge32_dispatch(const char *import_name, const uint32_t *arguments,
 {
     if(audio_queue_bridge32_dispatch(import_name,arguments,result))return 1;
     const size_t import_length = strlen(import_name);
+    if (audio_op_is_recorded(import_name)) {
+        AUGraph graph = graph_for_guest(arguments[0]);
+        if (!graph) (void)unit_for_guest(arguments[0], &graph);
+        note_audio_op('G', import_name + 1, arguments[0], graph, arguments[1]);
+    }
     if (LP32_NAME_IS(import_name, import_length, "_NewAUGraph")) {
         AUGraph graph = NULL;
         OSStatus status = NewAUGraph(&graph);
@@ -1822,6 +1940,8 @@ int audio_bridge32_dispatch(const char *import_name, const uint32_t *arguments,
                 /* The guest handle is free for reuse immediately; the worker
                    owns the host graph from here on. */
                 retire_guest_audio_objects(arguments[0], graph);
+            } else if (kind == kDeferredGraphClose) {
+                retire_guest_units_for_graph(graph);
             }
             enqueue_graph_teardown(graph, kind, NULL);
             *result = noErr;
@@ -1861,6 +1981,7 @@ int audio_bridge32_dispatch(const char *import_name, const uint32_t *arguments,
             if (LP32_NAME_IS(import_name, import_length, "_AUGraphUninitialize")) {
                 status = AUGraphUninitialize(graph);
             } else if (LP32_NAME_IS(import_name, import_length, "_AUGraphClose")) {
+                retire_guest_units_for_graph(graph);
                 status = AUGraphClose(graph);
             } else {
                 status = DisposeAUGraph(graph);
