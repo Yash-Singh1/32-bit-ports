@@ -44,7 +44,25 @@ single-player app. Each output contains its own copy of
 conversion and never modifies the source. After loader changes, run
 `make GAME=cod2 promote-loader` (or `cod2mp`).
 
-The standalone converter apps do not offer COD2 yet.
+## Converter app
+
+Build the standalone app with `make -C native cod2-converter`, then open
+`native/build/COD2-Converter.app`. Choose Campaign or Multiplayer, then use
+Find in Steam or choose your original Mac app or game folder. Choose an output
+folder to create `COD2-Compat.app` or `COD2MP-Compat.app`. Each contains its own
+copy of the game data. New conversions use numbered names to preserve existing
+converted apps and saves. Saves from an older converted app are not migrated.
+
+The converter runs on macOS 11 or later and needs no Xcode, Python, or source
+checkout. Converted games need Rosetta 2 on Apple Silicon. It uses Apple's
+OpenGL and includes the compatibility loader. The first conversion downloads
+Apple's 4.72 GB Lion archive to extract two runtime libraries, then reuses the
+same local cache as the COD4 converter. The distributed converter contains no
+game data or Apple runtime libraries. Steam editions still require Steam and
+an account that owns the game. Other Mac editions are unverified.
+
+Development releases are ad hoc signed, without Developer ID signing or
+notarization.
 
 ## Apple OpenGL by default, GLMetal opt-in
 
@@ -118,6 +136,9 @@ has been selected. On the profile screen, Tab and Right move focus to OK.
 make test-game-profile
 python3 tests/test_cod4_bundle.py
 python3 tests/test_glmetal_packaging.py
+make test-cod4-converter
+python3 tests/test_cod_converters_packaging.py --game cod2
+python3 tests/test_cod4_converter_integration.py --game cod2
 make GAME=cod2 test-cod4-initializers     # 11/11, needs build/COD2-Compat.app
 make GAME=cod2mp test-cod4-initializers   # 13/13
 ```

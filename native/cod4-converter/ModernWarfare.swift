@@ -1,24 +1,32 @@
 import Foundation
 
 enum GameTitle: String, CaseIterable {
-    case cod4, mw2, mw3
+    case cod2, cod4, mw2, mw3
     static var current: GameTitle {
         GameTitle(rawValue: Bundle.main.object(forInfoDictionaryKey: "LP32ConverterGame") as? String ?? "cod4") ?? .cod4
     }
     var short: String { rawValue.uppercased() }
     var title: String {
         switch self {
+        case .cod2: return "Call of Duty 2"
         case .cod4: return "Call of Duty 4"
         case .mw2: return "Modern Warfare 2"
         case .mw3: return "Modern Warfare 3"
         }
     }
+    var isCarbon: Bool { self == .cod2 || self == .cod4 }
+    var usesGLMetal: Bool { self != .cod2 }
     func stem(_ mode: GameMode) -> String { short + (mode == .mp ? "MP" : "") }
     func appID(_ mode: GameMode) -> Int {
-        self == .cod4 ? 7940 : (self == .mw2 ? 10180 : 42680) + (mode == .mp ? 10 : 0)
+        switch self {
+        case .cod2: return 2630
+        case .cod4: return 7940
+        case .mw2: return mode == .mp ? 10190 : 10180
+        case .mw3: return mode == .mp ? 42690 : 42680
+        }
     }
     func discover(_ selected: URL, mode: GameMode) throws -> any GameSource {
-        if self == .cod4 { return try COD4Source.discover(selected, mode: mode) }
+        if isCarbon { return try COD4Source.discover(selected, mode: mode, game: self) }
         let selected = selected.resolvingSymlinksInPath().standardizedFileURL
         let app = selected.pathExtension == "app" ? selected : selected.appendingPathComponent("COD_\(short)_\(mode.rawValue.uppercased()).app")
         let source = ModernWarfareSource(app: app, mode: mode, game: self)
@@ -26,7 +34,7 @@ enum GameTitle: String, CaseIterable {
         return source
     }
     func steamInstallation(mode: GameMode, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL? {
-        if self == .cod4 { return COD4Source.steamInstallation(home: home) }
+        if isCarbon { return COD4Source.steamInstallation(home: home, game: self) }
         let steam = home.appendingPathComponent("Library/Application Support/Steam")
         var libraries = [steam]
         if let text = try? String(contentsOf: steam.appendingPathComponent("steamapps/libraryfolders.vdf"), encoding: .utf8) {

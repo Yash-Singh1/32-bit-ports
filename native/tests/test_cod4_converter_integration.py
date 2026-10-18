@@ -47,12 +47,15 @@ def cancel_at(command, prefix, destination, env):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path)
+    parser.add_argument('--game', choices=['cod2', 'cod4'], default='cod4')
     parser.add_argument('--installer', type=Path, help='Also exercise Apple archive extraction')
     parser.add_argument('--runtime', type=Path, default=NATIVE / 'build/guest-runtime')
     args = parser.parse_args()
-    source = args.source.resolve() if args.source else bundle_cod4.steam_source()
+    source = args.source.resolve() if args.source else bundle_cod4.steam_source(game=args.game)
     before = inventory(source)
-    converter_app = NATIVE / 'build/COD4-Converter.app'
+    short = args.game.upper()
+    title = bundle_cod4.GAMES[args.game]['title']
+    converter_app = NATIVE / f'build/{short}-Converter.app'
     swift = (NATIVE / 'cod4-converter/Conversion.swift').read_text()
     assert runtime.URL in swift and runtime.INSTALLER_SHA256 in swift
     for name, (member, digest) in runtime.LIBRARIES.items():
@@ -62,7 +65,7 @@ def main():
         moved = root / "Converter ' standalone $.app"
         run('/usr/bin/ditto', converter_app, moved)
         run('/usr/bin/codesign', '--verify', '--deep', '--strict', moved)
-        executable = moved / 'Contents/MacOS/COD4Converter'
+        executable = moved / f'Contents/MacOS/{short}Converter'
         cache = root / "cache ' $"
         destination = root / "output ' $"
         cache.mkdir()
@@ -81,39 +84,42 @@ def main():
             output = Path(result.stdout.strip())
             outputs.append(output)
             suffix = '' if mode == 'sp' else 'MP'
-            assert output == destination / f'COD4{suffix}-Compat.app'
+            assert output == destination / f'{short}{suffix}-Compat.app'
             contents = output / 'Contents'
             run('/usr/bin/codesign', '--verify', '--strict', output)
             info = plistlib.loads((contents / 'Info.plist').read_bytes())
-            assert info['CFBundleExecutable'] == f'COD4{suffix}Compat'
-            assert info['CFBundleIdentifier'] == f'com.aspyr.callofduty4.{mode}.steam.compat'
-            assert info['LP32GeneratedGame'] == 'cod4' and not info['LP32ContinueWhenInactive']
+            assert info['CFBundleExecutable'] == f'{short}{suffix}Compat'
+            original_info = bundle_cod4.validate_source(source, mode, game=args.game)[2]
+            assert info['CFBundleIdentifier'] == original_info['CFBundleIdentifier'] + '.compat'
+            assert info['LP32GeneratedGame'] == args.game and not info['LP32ContinueWhenInactive']
+            assert info.get('LP32GLMetal') is (args.game != 'cod2')
+            assert info['LSEnvironment']['LP32_GL_BACKEND'] == ('apple' if args.game == 'cod2' else 'metal')
             assert info.get('NSAppTransportSecurity', {}).get('NSAllowsArbitraryLoads', False) == (mode == 'mp')
-            assert runtime.sha256(contents / f'SharedSupport/COD4{suffix}.image') == runtime.sha256(bundle_cod4.validate_source(source, mode)[1])
+            assert runtime.sha256(contents / f'SharedSupport/{short}{suffix}.image') == runtime.sha256(bundle_cod4.validate_source(source, mode, game=args.game)[1])
             for name, (_, digest) in runtime.LIBRARIES.items():
                 assert runtime.sha256(contents / 'SharedSupport/compat-runtime' / name) == digest
             # Both game-data trees are independent copies with the original bytes.
-            for relative in ('main/iw_00.iwd', 'zone/english/cargoship.ff'):
-                original = source / 'Contents/Call of Duty 4 Data' / relative
-                copied = contents / 'Call of Duty 4 Data' / relative
+            for relative in (('main/iw_00.iwd', 'main/iw_01.iwd') if args.game == 'cod2' else ('main/iw_00.iwd', 'zone/english/cargoship.ff')):
+                original = source / f'Contents/{title} Data' / relative
+                copied = contents / f'{title} Data' / relative
                 assert runtime.sha256(original) == runtime.sha256(copied)
                 assert original.stat().st_ino != copied.stat().st_ino
             checkenv = dict(env, LP32_INITIALIZERS_SELFTEST='1', LP32_BACKGROUND_TEST='1',
                             LP32_MUTE_AUDIO='1', LP32_NO_DIAGNOSTIC_LOG='1',
                             LP32_TEST_HOME_DIR=str(root / f'home-{mode}'),
                             LP32_APPLICATION_SUPPORT_DIR=str(root / f'home-{mode}/Library/Application Support'))
-            checked = run('/usr/bin/arch', '-x86_64', contents / f'MacOS/COD4{suffix}Compat',
+            checked = run('/usr/bin/arch', '-x86_64', contents / f'MacOS/{short}{suffix}Compat',
                           env=checkenv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=45)
             assert 'initializers completed:' in checked.stdout, checked.stdout[-4000:]
             print(f'PASS: {mode} signature, original data, private runtime and guest initializers', flush=True)
-        sentinel = outputs[0] / 'Contents/Call of Duty 4 Data/converter-test-checkpoint'
+        sentinel = outputs[0] / f'Contents/{title} Data/converter-test-checkpoint'
         sentinel.write_text('Preserve this newer checkpoint.\n')
         previous = inventory(outputs[0])
         cached = inventory(cache / 'runtime')
         repeated = run(*base, stdout=subprocess.PIPE, text=True, env=env, timeout=120)
-        assert Path(repeated.stdout.strip()).name == 'COD4-Compat 2.app'
+        assert Path(repeated.stdout.strip()).name == f'{short}-Compat 2.app'
         assert inventory(outputs[0]) == previous and inventory(cache / 'runtime') == cached
-        cancel_at(base, 'Copying Call of Duty 4', destination, env)
+        cancel_at(base, f'Copying {title}', destination, env)
         assert len(list(destination.iterdir())) == 3
         assert inventory(outputs[0]) == previous
         assert not list(cache.glob('extract-*'))

@@ -11,24 +11,24 @@ enum GameMode: String, CaseIterable {
 }
 
 struct COD4Source {
-    static let appName = "Call of Duty 4.app"
     let app: URL
     let mode: GameMode
     var directMultiplayer = false
+    var game: GameTitle = .cod4
     var contents: URL {
-        app.appendingPathComponent(mode == .sp || directMultiplayer ? "Contents" : "Contents/Call of Duty 4 Multiplayer.app/Contents")
+        app.appendingPathComponent(mode == .sp || directMultiplayer ? "Contents" : "Contents/\(game.title) Multiplayer.app/Contents")
     }
     var image: URL {
         let info = (try? Data(contentsOf: contents.appendingPathComponent("Info.plist")))
             .flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
-        let name = info?["CFBundleExecutable"] as? String ?? mode.originalExecutable
+        let name = info?["CFBundleExecutable"] as? String ?? (game.title + (mode == .mp ? " Multiplayer" : ""))
         return contents.appendingPathComponent("MacOS/" + name)
     }
     var resources: URL { contents.appendingPathComponent("Resources") }
     var gameData: URL {
-        let candidates = [app.appendingPathComponent("Contents/Call of Duty 4 Data"),
-                          app.appendingPathComponent("Contents/Resources/Call of Duty 4 Data"),
-                          app.deletingLastPathComponent().appendingPathComponent("Call of Duty 4 Data")]
+        let candidates = [app.appendingPathComponent("Contents/\(game.title) Data"),
+                          app.appendingPathComponent("Contents/Resources/\(game.title) Data"),
+                          app.deletingLastPathComponent().appendingPathComponent("\(game.title) Data")]
         return candidates.first { FileManager.default.fileExists(atPath: $0.appendingPathComponent("main/iw_00.iwd").path) } ?? candidates[0]
     }
     private func library(_ name: String) -> URL? {
@@ -41,22 +41,22 @@ struct COD4Source {
     var steamLibrary: URL? { library("libsteam_api.dylib") }
     var binkLibrary: URL? { library("libBinkMachOx86.dylib") }
 
-    static func discover(_ selected: URL, mode: GameMode = .sp) throws -> COD4Source {
+    static func discover(_ selected: URL, mode: GameMode = .sp, game: GameTitle = .cod4) throws -> COD4Source {
         let selected = selected.resolvingSymlinksInPath().standardizedFileURL
         var candidates = [selected]
         // Finder can select the nested multiplayer app as well as the outer app.
-        if selected.lastPathComponent == "Call of Duty 4 Multiplayer.app" {
+        if selected.lastPathComponent == "\(game.title) Multiplayer.app" {
             candidates.insert(selected.deletingLastPathComponent().deletingLastPathComponent(), at: 0)
         }
-        for prefix in ["", "Call of Duty 4/", "common/Call of Duty 4/", "steamapps/common/Call of Duty 4/"] {
-            candidates.append(selected.appendingPathComponent(prefix + appName))
+        for prefix in ["", "\(game.title)/", "common/\(game.title)/", "steamapps/common/\(game.title)/"] {
+            candidates.append(selected.appendingPathComponent(prefix + game.title + ".app"))
         }
         var firstError: Error?
         for app in candidates {
             guard FileManager.default.fileExists(atPath: app.appendingPathComponent("Contents/Info.plist").path) else { continue }
             let source = COD4Source(app: app, mode: mode,
                                     directMultiplayer: mode == .mp && app == selected &&
-                                        app.lastPathComponent == "Call of Duty 4 Multiplayer.app")
+                                        app.lastPathComponent == "\(game.title) Multiplayer.app", game: game)
             do {
                 _ = try source.validateLayout()
                 return source
@@ -65,7 +65,7 @@ struct COD4Source {
             }
         }
         if let firstError { throw firstError }
-        throw ConversionError.message("Choose the original Mac Call of Duty 4 app or its game folder. The executable must contain 32-bit Intel Mac code.")
+        throw ConversionError.message("Choose the original Mac \(game.title) app or its game folder. The executable must contain 32-bit Intel Mac code.")
     }
 
     func validateLayout() throws -> [String: Any] {
@@ -84,24 +84,24 @@ struct COD4Source {
                 throw ConversionError.message("The Mac game installation is incomplete: missing \(file.lastPathComponent).")
             }
         }
-        if info["LP32GeneratedGame"] as? String == "cod4" {
+        if info["LP32GeneratedGame"] != nil {
             throw ConversionError.message("Choose the original game app, rather than an already converted copy.")
         }
         return info
     }
 
-    static func steamInstallation(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL? {
+    static func steamInstallation(home: URL = FileManager.default.homeDirectoryForCurrentUser, game: GameTitle = .cod4) -> URL? {
         let steam = home.appendingPathComponent("Library/Application Support/Steam")
         var libraries = [steam]
         if let text = try? String(contentsOf: steam.appendingPathComponent("steamapps/libraryfolders.vdf"), encoding: .utf8) {
             for path in vdfValues("path", in: text) { libraries.append(URL(fileURLWithPath: path)) }
         }
         for library in libraries {
-            guard let manifest = try? String(contentsOf: library.appendingPathComponent("steamapps/appmanifest_7940.acf"), encoding: .utf8),
+            guard let manifest = try? String(contentsOf: library.appendingPathComponent("steamapps/appmanifest_\(game.appID(.sp)).acf"), encoding: .utf8),
                   let folder = vdfValues("installdir", in: manifest).first,
                   !folder.isEmpty, folder != ".", folder != "..", !folder.contains("/"), !folder.contains("\\") else { continue }
-            let app = library.appendingPathComponent("steamapps/common/" + folder + "/" + appName)
-            if (try? discover(app)) != nil { return app }
+            let app = library.appendingPathComponent("steamapps/common/" + folder + "/" + game.title + ".app")
+            if (try? discover(app, game: game)) != nil { return app }
         }
         return nil
     }
@@ -116,7 +116,7 @@ struct COD4Source {
     }
 
     func checkDestination(_ destination: URL) throws {
-        guard !isInside(destination, app) else {
+        guard !isInside(destination, app), !isInside(destination, gameData) else {
             throw ConversionError.message("Choose an output folder outside the original game files.")
         }
     }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a self-contained COD4, MW2 or MW3 converter from compiled components."""
+"""Build a self-contained COD2, COD4, MW2 or MW3 converter from compiled components."""
 import argparse
 from pathlib import Path
 import plistlib
@@ -10,11 +10,11 @@ from package_glmetal import install, run, DEFAULT_BUILD
 
 
 # Each standalone converter has its own development release sequence.
-BUILD_VERSIONS = {'cod4': '4', 'mw2': '1', 'mw3': '1'}
+BUILD_VERSIONS = {'cod2': '1', 'cod4': '4', 'mw2': '1', 'mw3': '1'}
 
 
 def package(game, build, glmetal):
-    title = {'cod4': 'Call of Duty 4', 'mw2': 'Modern Warfare 2', 'mw3': 'Modern Warfare 3'}[game]
+    title = {'cod2': 'Call of Duty 2', 'cod4': 'Call of Duty 4', 'mw2': 'Modern Warfare 2', 'mw3': 'Modern Warfare 3'}[game]
     short = game.upper()
     app = build / f'{short}-Converter.app'
     with tempfile.TemporaryDirectory(prefix=f'.{game}-converter-', dir=build) as tmp:
@@ -27,7 +27,8 @@ def package(game, build, glmetal):
         loader = contents / 'Resources/game_loader'
         shutil.copy2(build / 'game_loader', loader)
         run('codesign', '--force', '--sign', '-', loader)
-        install(glmetal, contents / 'Frameworks/GLMetal', contents / 'Resources/GLMetal-build-info.json')
+        if game != 'cod2':
+            install(glmetal, contents / 'Frameworks/GLMetal', contents / 'Resources/GLMetal-build-info.json')
         info = plistlib.loads((Path(__file__).resolve().parents[1] / 'cod4-converter/Info.plist').read_bytes())
         info.update(CFBundleExecutable=f'{short}Converter', CFBundleIdentifier=f'org.32bitgoofy.{short}Converter',
                     CFBundleName=f'{short} Converter', CFBundleDisplayName=f'{short} Converter',
@@ -51,7 +52,7 @@ def package(game, build, glmetal):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--game', choices=['cod4', 'mw2', 'mw3'], required=True)
+    parser.add_argument('--game', choices=BUILD_VERSIONS, required=True)
     parser.add_argument('--build', type=Path, default=Path('build'))
     parser.add_argument('--glmetal', type=Path, default=DEFAULT_BUILD)
     args = parser.parse_args()

@@ -23,7 +23,8 @@ Aspyr's Steam Mac release of Call of Duty 2 (1.3.1) is experimental too:
 `make -C native GAME=cod2 bundle` (or `cod2mp`) builds a compatibility app
 after `make -C native cod4-runtime`. Both editions reached gameplay in short
 probes. COD2 apps use Apple's OpenGL; GLMetal also runs both editions as
-an opt-in. See [native/COD2.md](native/COD2.md).
+an opt-in. A standalone converter is available with
+`make -C native cod2-converter`. See [native/COD2.md](native/COD2.md).
 
 Support for the original 32-bit Mac releases:
 
@@ -58,7 +59,8 @@ git submodule update --init --recursive
 ```
 
 The Call of Duty build targets also initialize it automatically when missing.
-Prebuilt converters already contain GLMetal and need no repository access.
+Prebuilt COD4, MW2, and MW3 converters already contain GLMetal and need no
+repository access. The COD2 converter uses Apple OpenGL.
 
 For a Finder-based COD4 conversion, build the standalone app once:
 

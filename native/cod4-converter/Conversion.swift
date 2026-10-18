@@ -304,8 +304,8 @@ final class Converter {
         }
         // This also reports a missing Rosetta installation before downloading or copying.
         try run("/usr/bin/arch", ["-x86_64", "/usr/bin/true"])
-        let metal = try validateGLMetal()
-        let runtime = game == .cod4 ? try prepareRuntime() : nil
+        let metal = game.usesGLMetal ? try validateGLMetal() : nil
+        let runtime = game.isCarbon ? try prepareRuntime() : nil
         let temp = destination.appendingPathComponent(".cod4-converting-\(UUID().uuidString)")
         try fm.createDirectory(at: temp, withIntermediateDirectories: false)
         defer { try? fm.removeItem(at: temp) }
@@ -315,7 +315,7 @@ final class Converter {
             try fm.createDirectory(at: output.appendingPathComponent(directory), withIntermediateDirectories: true)
         }
         progress("Copying \(game.title)…", "Creating your \(mode.title.lowercased()) app. This creates an independent copy of the game files.")
-        try copyGameTree(layout.gameData, to: output.appendingPathComponent(game == .cod4 ? "Call of Duty 4 Data" : "GameData"), check: cancellation.check)
+        try copyGameTree(layout.gameData, to: output.appendingPathComponent(game.isCarbon ? "\(game.title) Data" : "GameData"), check: cancellation.check)
         if fm.fileExists(atPath: layout.resources.path) {
             try copyGameTree(layout.resources, to: output.appendingPathComponent("Resources"),
                              excluding: layout.gameData, check: cancellation.check)
@@ -338,8 +338,10 @@ final class Converter {
                 }
             }
         }
-        try copyGameTree(metal, to: output.appendingPathComponent("Frameworks/GLMetal"), check: cancellation.check)
-        try fm.copyItem(at: resources.appendingPathComponent("GLMetal-build-info.json"), to: output.appendingPathComponent("Resources/GLMetal-build-info.json"))
+        if let metal {
+            try copyGameTree(metal, to: output.appendingPathComponent("Frameworks/GLMetal"), check: cancellation.check)
+            try fm.copyItem(at: resources.appendingPathComponent("GLMetal-build-info.json"), to: output.appendingPathComponent("Resources/GLMetal-build-info.json"))
+        }
         try fm.copyItem(at: loader, to: output.appendingPathComponent("MacOS/" + stem + "Compat"))
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: output.appendingPathComponent("MacOS/" + stem + "Compat").path)
         let steamOutput = output.appendingPathComponent("Resources/libsteam_api.dylib")
@@ -357,17 +359,17 @@ final class Converter {
         info["LSMinimumSystemVersion"] = "11.0"
         info["NSHighResolutionCapable"] = false
         info["LP32GeneratedGame"] = game.rawValue
-        info["LP32GLMetal"] = true
+        info["LP32GLMetal"] = game.usesGLMetal
         var environment = info["LSEnvironment"] as? [String: String] ?? [:]
-        environment["LP32_GL_BACKEND"] = "metal"
+        environment["LP32_GL_BACKEND"] = game.usesGLMetal ? "metal" : "apple"
         environment.removeValue(forKey: "LP32_GLMETAL_PATH")
         info["LSEnvironment"] = environment
-        if game != .cod4 {
+        if !game.isCarbon {
             info["LP32SteamAppID"] = game.appID(mode)
             for key in ["NSMainNibFile", "GameGuide", "DefaultChildApp"] { info.removeValue(forKey: key) }
         }
         info["LP32ContinueWhenInactive"] = false
-        if game == .cod4 && mode == .mp {
+        if game.isCarbon && mode == .mp {
             // Legacy servers choose their own HTTP mod-download hosts. The
             // original NSURLDownload path predates ATS; preserve that support.
             info["NSAppTransportSecurity"] = ["NSAllowsArbitraryLoads": true]

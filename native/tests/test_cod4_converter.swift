@@ -144,6 +144,39 @@ struct ConverterTests {
         try Data("game".utf8).write(to: layout.gameData.appendingPathComponent("main/iw_00.iwd"))
         print("PASS: SP/MP layouts, Steam discovery, other editions, copy, links, containment and missing data")
 
+        let cod2 = steamRoot.appendingPathComponent("steamapps/common/Call of Duty 2/Call of Duty 2.app")
+        for mode in GameMode.allCases {
+            let layout = COD4Source(app: cod2, mode: mode, game: .cod2)
+            for directory in [layout.contents.appendingPathComponent("MacOS"), layout.resources, layout.gameData.appendingPathComponent("main")] {
+                try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            }
+            let original = "Call of Duty 2" + (mode == .mp ? " Multiplayer" : "")
+            let info: [String: Any] = ["CFBundleExecutable": original, "CFBundleIdentifier": "test.cod2.\(mode.rawValue)"]
+            let plist = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            try plist.write(to: layout.contents.appendingPathComponent("Info.plist"))
+            try thin.write(to: layout.image)
+            try Data("cod2 game".utf8).write(to: layout.gameData.appendingPathComponent("main/iw_00.iwd"))
+            for selection in [cod2, cod2.deletingLastPathComponent(), steamRoot] {
+                try expect(try GameTitle.cod2.discover(selection, mode: mode).image == layout.image, "COD2 folder and mode discovery")
+            }
+            try expect(GameTitle.cod2.stem(mode) == (mode == .sp ? "COD2" : "COD2MP"), "COD2 output names")
+            try expect(GameTitle.cod2.appID(mode) == 2630, "COD2 shares one Steam app ID")
+            try rejects("output inside COD2 data") { try layout.checkDestination(layout.gameData) }
+            var generated = info
+            generated["LP32GeneratedGame"] = "cod2"
+            try PropertyListSerialization.data(fromPropertyList: generated, format: .xml, options: 0)
+                .write(to: layout.contents.appendingPathComponent("Info.plist"))
+            try rejects("converted COD2 input") { _ = try layout.validateLayout() }
+            try plist.write(to: layout.contents.appendingPathComponent("Info.plist"))
+        }
+        let cod2Nested = cod2.appendingPathComponent("Contents/Call of Duty 2 Multiplayer.app")
+        try expect(try GameTitle.cod2.discover(cod2Nested, mode: .mp).app.path == cod2.path, "COD2 nested multiplayer selection")
+        let cod2Manifest = steamRoot.appendingPathComponent("steamapps/appmanifest_2630.acf")
+        try "\"installdir\" \"Call of Duty 2\"".write(to: cod2Manifest, atomically: true, encoding: .utf8)
+        try expect(GameTitle.cod2.steamInstallation(mode: .mp, home: home)?.path == cod2.path, "COD2 external Steam library")
+        try expect(GameTitle.cod2.isCarbon && !GameTitle.cod2.usesGLMetal, "COD2 uses private runtime and Apple OpenGL")
+        print("PASS: COD2 campaign/multiplayer discovery, Steam, output names and source protection")
+
         for game in [GameTitle.mw2, .mw3] {
             let library = temp.appendingPathComponent("\(game.short) Steam Library")
             let install = library.appendingPathComponent("steamapps/common/\(game.title)")

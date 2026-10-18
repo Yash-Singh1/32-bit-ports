@@ -4,7 +4,7 @@ import AppKit
 if CommandLine.arguments.dropFirst().first == "--convert" {
     let args = CommandLine.arguments
     guard args.count >= 4 else {
-        fputs("Usage: COD4Converter --convert SOURCE_APP_OR_FOLDER OUTPUT_FOLDER [--mode sp|mp] [--cache CACHE_FOLDER]\n", stderr)
+        fputs("Usage: \(GameTitle.current.short)Converter --convert SOURCE_APP_OR_FOLDER OUTPUT_FOLDER [--mode sp|mp] [--cache CACHE_FOLDER]\n", stderr)
         exit(2)
     }
     var mode = GameMode.sp

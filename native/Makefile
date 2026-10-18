@@ -153,15 +153,16 @@ $(BUILD_DIR)/cod4-converter-x86_64: $(COD4_CONVERTER_SOURCES) | $(BUILD_DIR)
 # Always ask GLMetal's own dependency graph to refresh its driver/helper pair.
 GLMETAL_SOURCE ?= glmetal
 GLMETAL_BUILD ?= $(GLMETAL_SOURCE)/build
-.PHONY: glmetal-lib cod-converters cod4-converter mw2-converter mw3-converter test-cod4-converter
+.PHONY: glmetal-lib cod-converters cod2-converter cod4-converter mw2-converter mw3-converter test-cod4-converter
 glmetal-lib:
 	@if test "$(GLMETAL_SOURCE)" = glmetal && ! test -f glmetal/Makefile; then \
 		git -C .. submodule update --init --recursive -- native/glmetal; \
 	fi
 	$(MAKE) -C "$(GLMETAL_SOURCE)" lib
 
-cod-converters: cod4-converter mw2-converter mw3-converter
-cod4-converter mw2-converter mw3-converter: $(BUILD_DIR)/cod4-converter-arm64 $(BUILD_DIR)/cod4-converter-x86_64 $(BUILD_DIR)/game_loader glmetal-lib cod4-converter/Info.plist
+cod-converters: cod2-converter cod4-converter mw2-converter mw3-converter
+cod4-converter mw2-converter mw3-converter: glmetal-lib
+cod2-converter cod4-converter mw2-converter mw3-converter: $(BUILD_DIR)/cod4-converter-arm64 $(BUILD_DIR)/cod4-converter-x86_64 $(BUILD_DIR)/game_loader cod4-converter/Info.plist
 	python3 tools/package_converter.py --game "$(@:-converter=)" --build "$(BUILD_DIR)" --glmetal "$(GLMETAL_BUILD)"
 
 $(BUILD_DIR)/test_cod4_converter: $(COD4_CONVERTER_CORE) tests/test_cod4_converter.swift | $(BUILD_DIR)

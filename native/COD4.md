@@ -51,13 +51,14 @@ capture, so its cause has not been established.
 
 ## Converter app
 
-The converters now package GLMetal and its native shader compiler. Build all
-three standalone apps with `make -C native cod-converters`, or use
-`cod4-converter`, `mw2-converter`, or `mw3-converter` for one title. The output
-apps are `native/build/COD4-Converter.app`, `MW2-Converter.app`, and
+The COD4, MW2, and MW3 converters package GLMetal and its native shader
+compiler. The [COD2 converter](COD2.md#converter-app) uses Apple OpenGL.
+Build all four standalone apps with `make -C native cod-converters`, or use
+`cod2-converter`, `cod4-converter`, `mw2-converter`, or `mw3-converter` for one title. The output
+apps are `native/build/COD2-Converter.app`, `COD4-Converter.app`, `MW2-Converter.app`, and
 `MW3-Converter.app`. Each supports campaign and multiplayer.
 
-Each build asks `native/glmetal` to rebuild its `lib` target, then copies and
+Each GLMetal converter build asks `native/glmetal` to rebuild its `lib` target, then copies and
 signs the resulting driver and compiler. `GLMETAL_SOURCE` can select another
 GLMetal checkout. The converters keep that build inside the app and copy it
 into every converted game. They do not fetch updates at conversion time.
