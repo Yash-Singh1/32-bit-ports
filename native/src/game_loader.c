@@ -948,7 +948,7 @@ static void runtime_diagnostic_line(const char *line)
 static const char *default_image_path(const char *argv0, char *buffer,
                                       size_t size)
 {
-    static const char *const candidates[] = {"LEGOPirates", "LEGOCloneWars", "LEGOMarvel", "LEGOCompleteSaga", "COD4", "COD4MP", "MW2", "MW2MP", "MW3", "MW3MP"};
+    static const char *const candidates[] = {"LEGOPirates", "LEGOCloneWars", "LEGOMarvel", "LEGOCompleteSaga", "COD4", "COD4MP", "COD2", "COD2MP", "MW2", "MW2MP", "MW3", "MW3MP"};
     const char *slash = strrchr(argv0, '/');
     size_t directory_length = slash ? (size_t)(slash - argv0) : 0;
     for (size_t index = 0; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {
@@ -1072,7 +1072,7 @@ int main(int argc, char **argv)
         macho_image32_unload(&image);
         return result ? EXIT_FAILURE : EXIT_SUCCESS;
     }
-    if (lp32_profile()->title == LP32_TITLE_COD4 || lp32_profile()->title == LP32_TITLE_COD4_MP) {
+    if (lp32_title_is_cod_carbon(lp32_profile()->title)) {
         /* The renderer accepts only an exact 24-bit depth-buffer capability.
            Current Apple GPUs offer 32-bit depth. Accept both; the original
            AGL request still chooses a real format with at least 24 bits. */
@@ -1081,7 +1081,8 @@ int main(int argc, char **argv)
             uint8_t *code = (void *)(uintptr_t)check->address;
             if (memcmp(code, check->expected, check->length) ||
                 mprotect((void *)(uintptr_t)(check->address & ~4095u), 4096, PROT_READ | PROT_WRITE | PROT_EXEC)) {
-                fprintf(stderr, "game_loader: COD4 depth capability signature mismatch or protection error\n");
+                fprintf(stderr, "game_loader: %s depth capability signature mismatch or protection error\n",
+                        lp32_profile()->name);
                 return EXIT_FAILURE;
             }
             code[check->length - 1] = 0x18;
@@ -1300,8 +1301,7 @@ int main(int argc, char **argv)
     /* Lightweight, bounded reports; no full import profiling or draw dumps.
        COD4 deliberately redraws some loading screens at 30 Hz, so its default
        threshold is 50 ms rather than treating each loading frame as a hitch. */
-    bool cod4_hitches = lp32_profile()->title == LP32_TITLE_COD4 ||
-                       lp32_profile()->title == LP32_TITLE_COD4_MP;
+    bool cod_hitches = lp32_title_is_cod_carbon(lp32_profile()->title);
     bool modern_warfare_hitches = lp32_profile()->title == LP32_TITLE_MW2 ||
                                   lp32_profile()->title == LP32_TITLE_MW2_MP ||
                                   lp32_profile()->title == LP32_TITLE_MW3 ||
@@ -1309,7 +1309,7 @@ int main(int argc, char **argv)
     const char *hitch_option = getenv("LP32_HITCH_LOG");
     if ((hitch_option && strcmp(hitch_option, "0")) ||
         (!hitch_option && (lp32_profile()->title == LP32_TITLE_MARVEL ||
-                           cod4_hitches || modern_warfare_hitches))) {
+                           cod_hitches || modern_warfare_hitches))) {
         char path[PATH_MAX];
         const char *home = getenv("HOME");
         int length = snprintf(path, sizeof(path), "%s/Library/Logs/%s/hitches-%ld-%llu.log",
@@ -1320,7 +1320,7 @@ int main(int argc, char **argv)
         const char *threshold = getenv("LP32_HITCH_MS");
         if (length > 0 && (size_t)length < sizeof(path) &&
             hitch_start(destination, threshold ? strtod(threshold, NULL) :
-                        (cod4_hitches ? 50.0 : 25.0)) == 0) {
+                        (cod_hitches ? 50.0 : 25.0)) == 0) {
             GUEST_DIAGNOSTIC("compat32: automatic hitch recorder: %s\n", destination);
         } else {
             perror("compat32: hitch recorder unavailable");
@@ -1367,8 +1367,7 @@ int main(int argc, char **argv)
         const char *extra_argument_text = getenv("LP32_GUEST_EXTRA_ARGUMENT");
         /* Aspyr's documented-in-code -g option enters the game directly
            instead of opening the obsolete embedded Game Guide browser. */
-        if (!extra_argument_text && (lp32_profile()->title == LP32_TITLE_COD4 ||
-                                     lp32_profile()->title == LP32_TITLE_COD4_MP))
+        if (!extra_argument_text && lp32_title_is_cod_carbon(lp32_profile()->title))
             extra_argument_text = "-g";
         /* Space-separated, so tests can pass e.g. "-g +map killhouse". */
         enum { kMaxExtraArguments = 16 };

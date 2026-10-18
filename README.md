@@ -19,6 +19,12 @@ experimental: `make -C native GAME=mw2 bundle` or `GAME=mw3 bundle` (and
 compatibility app in `native/build/`. MW3 campaign reaches gameplay in short
 probes; MW3 multiplayer logs in to Activision's servers, but their Mac lobby currently refuses the session, so online play is untested.
 
+Aspyr's Steam Mac release of Call of Duty 2 (1.3.1) is experimental too:
+`make -C native GAME=cod2 bundle` (or `cod2mp`) builds a compatibility app
+after `make -C native cod4-runtime`. Both editions reached gameplay in short
+probes. COD2 apps use Apple's OpenGL; GLMetal also runs both editions as
+an opt-in. See [native/COD2.md](native/COD2.md).
+
 Support for the original 32-bit Mac releases:
 
 | Game | Mac release | Status |

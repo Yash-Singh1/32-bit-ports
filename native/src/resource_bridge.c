@@ -357,6 +357,26 @@ int resource_bridge32_dispatch(const char *name, const uint32_t *a,
     *out = 0;
     return 1;
   }
+  if (IS("_PtrAndHand")) {
+    /* (ptr, handle, size): append size bytes to the handle; returns OSErr. */
+    struct handle32 *h = find_handle(a[1]);
+    memory_error = -109;
+    if (h && a[2] <= UINT32_MAX - h->size) {
+      uint32_t old_data = *(uint32_t *)(uintptr_t)h->cell, old_size = h->size;
+      /* The source may lie inside the block that is about to move. */
+      bool inside = a[0] >= old_data && a[0] - old_data < old_size;
+      uint32_t data = compat_runtime32_reallocate(old_data, old_size + a[2] ? old_size + a[2] : 1);
+      memory_error = data ? 0 : -108;
+      if (data) {
+        memmove((void *)(uintptr_t)(data + old_size),
+                (const void *)(uintptr_t)(inside ? data + (a[0] - old_data) : a[0]), a[2]);
+        *(uint32_t *)(uintptr_t)h->cell = data;
+        h->size = old_size + a[2];
+      }
+    }
+    *out = (uint32_t)(int32_t)memory_error;
+    return 1;
+  }
   if (IS("_ReallocateHandle")) {
     struct handle32 *h = find_handle(a[0]);
     memory_error = -109;

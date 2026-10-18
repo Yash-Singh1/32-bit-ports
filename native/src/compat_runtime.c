@@ -1586,7 +1586,7 @@ static int build_transition_bridge(void)
 
 static uint32_t guest_context_symbol(const char *name)
 {
-    if (lp32_profile()->title != LP32_TITLE_COD4 && lp32_profile()->title != LP32_TITLE_COD4_MP &&
+    if (!lp32_title_is_cod_carbon(lp32_profile()->title) &&
         !lp32_title_is_mw_sdl(lp32_profile()->title)) return 0;
     const uint8_t *entry = NULL;
     if (!strcmp(name, "_setjmp")) entry = lp32_context_setjmp;
@@ -4495,8 +4495,7 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
     if (!strcmp(name, "_puts")) {
         /* Aspyr prints the Steam proof-of-purchase key before storing it.
            Keep the license callback intact without recording its secret. */
-        if ((lp32_profile()->title == LP32_TITLE_COD4 ||
-             lp32_profile()->title == LP32_TITLE_COD4_MP) &&
+        if (lp32_title_is_cod_carbon(lp32_profile()->title) &&
             !lp32_profile()->license_log_return_address)
             return 0;
         if (return_address && return_address == lp32_profile()->license_log_return_address)

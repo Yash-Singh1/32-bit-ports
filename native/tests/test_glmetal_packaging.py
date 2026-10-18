@@ -125,11 +125,12 @@ class GameGLMetalConversionTests(unittest.TestCase):
 
     def fixture(self, game, mode):
         install = self.root / (game + '-' + mode)
-        if game == 'cod4':
-            source = install / 'Call of Duty 4.app'
-            selected = source if mode == 'sp' else source / 'Contents/Call of Duty 4 Multiplayer.app'
-            name = cod4.EXECUTABLES[mode]
-            data = source / 'Contents/Call of Duty 4 Data'
+        if game in cod4.GAMES:
+            title = cod4.GAMES[game]['title']
+            source = install / f'{title}.app'
+            selected = source if mode == 'sp' else source / f'Contents/{title} Multiplayer.app'
+            name = cod4.executables(game)[mode]
+            data = source / f'Contents/{title} Data'
             libraries = ()
         else:
             name = mw2.GAMES[game][2][mode][0]
@@ -143,7 +144,7 @@ class GameGLMetalConversionTests(unittest.TestCase):
         (data / 'main/iw_00.iwd').write_bytes(b'game assets')
         (data / 'players').mkdir()
         (data / 'players/save').write_bytes(b'player save')
-        (macos / (name if game == 'cod4' else name + 'sub')).write_bytes(image())
+        (macos / (name if game in cod4.GAMES else name + 'sub')).write_bytes(image())
         for library in libraries:
             (macos / library).write_bytes(image())
         (macos / 'libsteam_api.dylib').write_bytes(image(0x01000007))
@@ -153,8 +154,8 @@ class GameGLMetalConversionTests(unittest.TestCase):
         return source, install
 
     def convert(self, game, mode, source, output):
-        if game == 'cod4':
-            cod4.build(source, mode, self.loader, output, False, self.runtime, glmetal=self.glmetal)
+        if game in cod4.GAMES:
+            cod4.build(source, mode, self.loader, output, False, self.runtime, glmetal=self.glmetal, game=game)
         else:
             mw2.build(source, mode, self.loader, output, game=game, glmetal=self.glmetal)
 
@@ -182,6 +183,30 @@ class GameGLMetalConversionTests(unittest.TestCase):
                     self.assertTrue((output / 'Contents/Resources/GLMetal-build-info.json').is_file())
                     data = output / ('Contents/Call of Duty 4 Data' if game == 'cod4' else 'Contents/GameData')
                     self.assertEqual((data / 'players/save').read_bytes(), b'player save')
+
+    def test_cod2_keeps_apple_opengl_and_preserves_source(self):
+        # COD2 renders into GL_AUX0/GL_AUX1, which GLMetal does not provide.
+        for mode in ('sp', 'mp'):
+            with self.subTest(mode=mode):
+                source, install = self.fixture('cod2', mode)
+                before = snapshot(install)
+                output = self.root / f'cod2-{mode}-Compat.app'
+                with patch.object(metal, 'validate', side_effect=AssertionError('GLMetal used')), \
+                     patch.object(metal, 'install', side_effect=AssertionError('GLMetal used')), \
+                     patch.object(cod4, 'ditto', side_effect=copy_tree), patch.object(cod4, 'run'), \
+                     patch.object(runtime_tools, 'LIBRARIES', self.runtime_entries):
+                    self.convert('cod2', mode, source, output)
+                self.assertEqual(snapshot(install), before)
+                stem = 'COD2MP' if mode == 'mp' else 'COD2'
+                info = plistlib.loads((output / 'Contents/Info.plist').read_bytes())
+                self.assertEqual(info['LP32GeneratedGame'], 'cod2')
+                self.assertEqual(info['CFBundleExecutable'], f'{stem}Compat')
+                self.assertNotIn('LP32GLMetal', info)
+                self.assertEqual(info['LSEnvironment'].get('LP32_GL_BACKEND'), 'old')
+                self.assertFalse((output / 'Contents/Frameworks/GLMetal').exists())
+                self.assertTrue((output / f'Contents/SharedSupport/{stem}.image').is_file())
+                data = output / 'Contents/Call of Duty 2 Data'
+                self.assertEqual((data / 'players/save').read_bytes(), b'player save')
 
     def test_failed_signing_preserves_existing_cod4_bundle(self):
         source, install = self.fixture('cod4', 'sp')

@@ -451,7 +451,7 @@ static LP32CarbonPanel *panel_for(void *native, BOOL create) {
   NSRect rect =
       NSMakeRect(bounds.left, screen.size.height - bounds.bottom,
                  bounds.right - bounds.left, bounds.bottom - bounds.top);
-  Class window_class = (lp32_profile()->title == LP32_TITLE_COD4 || lp32_profile()->title == LP32_TITLE_COD4_MP) ?
+  Class window_class = lp32_title_is_cod_carbon(lp32_profile()->title) ?
       [LP32CarbonSurfaceWindow class] : [NSWindow class];
   panel->window = [[window_class alloc]
       initWithContentRect:rect
@@ -648,7 +648,7 @@ void carbon_ui_fullscreen(void *native, uint32_t display, int32_t width, int32_t
   LP32CarbonPanel *panel = panel_for(native, YES);
   panel->game_surface = YES;
   panel->surface_size[0] = width; panel->surface_size[1] = height;
-  if (lp32_profile()->title == LP32_TITLE_COD4 || lp32_profile()->title == LP32_TITLE_COD4_MP) {
+  if (lp32_title_is_cod_carbon(lp32_profile()->title)) {
     /* COD4 keeps its painted Carbon main window as the input/event target,
        then moves AGL to a separate display port. Present only that port. */
     fullscreen_panel = panel;
@@ -676,6 +676,7 @@ void carbon_ui_show(void *native) {
     [p->window orderBack:nil];
   else
     [p->window makeKeyAndOrderFront:nil];
+  objc_bridge32_install_test_input(p->window);
   carbon_apply_fullscreen_presentation();
 }
 void carbon_ui_hide(void *native) {

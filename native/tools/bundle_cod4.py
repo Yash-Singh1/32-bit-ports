@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a COD4 compatibility app from a 32-bit Mac installation."""
+"""Build a COD4 or COD2 compatibility app from a 32-bit Mac installation."""
 import argparse
 import plistlib
 import re
@@ -10,7 +10,23 @@ import tempfile
 from pathlib import Path
 import package_glmetal
 
-EXECUTABLES = {"sp": "Call of Duty 4", "mp": "Call of Duty 4 Multiplayer"}
+# Aspyr ported COD2 and COD4 with the same Carbon engine layer, launcher and
+# bundle layout: the multiplayer app is nested in the single-player app.
+# COD2 renders its Direct3D render targets into the default framebuffer's
+# auxiliary buffers (GL_AUX0/GL_AUX1), which Apple's legacy OpenGL provides
+# and GLMetal does not, so its apps keep Apple's OpenGL.
+GAMES = {
+    "cod4": {"title": "Call of Duty 4", "stem": "COD4", "steam_app": 7940, "glmetal": True},
+    "cod2": {"title": "Call of Duty 2", "stem": "COD2", "steam_app": 2630, "glmetal": False},
+}
+
+
+def executables(game="cod4"):
+    title = GAMES[game]["title"]
+    return {"sp": title, "mp": f"{title} Multiplayer"}
+
+
+EXECUTABLES = executables()
 
 
 def macho_slice(data, cpu):
@@ -33,13 +49,14 @@ def macho_slice(data, cpu):
     raise ValueError("The library or game executable has no required Intel Mach-O architecture")
 
 
-def game_data(source):
-    for path in (source / 'Contents/Call of Duty 4 Data',
-                 source / 'Contents/Resources/Call of Duty 4 Data',
-                 source.parent / 'Call of Duty 4 Data'):
+def game_data(source, game="cod4"):
+    data = f"{GAMES[game]['title']} Data"
+    for path in (source / 'Contents' / data,
+                 source / 'Contents/Resources' / data,
+                 source.parent / data):
         if (path / 'main/iw_00.iwd').is_file():
             return path
-    raise ValueError("Missing Call of Duty 4 Data/main/iw_00.iwd")
+    raise ValueError(f"Missing {data}/main/iw_00.iwd")
 
 
 def library(contents, name):
@@ -47,7 +64,8 @@ def library(contents, name):
                  if (contents / directory / name).is_file()), None)
 
 
-def steam_source(steam=None):
+def steam_source(steam=None, game="cod4"):
+    title, app_id = GAMES[game]["title"], GAMES[game]["steam_app"]
     steam = steam or Path.home() / "Library/Application Support/Steam"
     libraries = [steam]
     folders = steam / "steamapps/libraryfolders.vdf"
@@ -55,20 +73,21 @@ def steam_source(steam=None):
         libraries += [Path(p.replace("\\\\", "\\")) for p in
                       re.findall(r'"path"\s+"([^"\n]+)"', folders.read_text())]
     for library in dict.fromkeys(libraries):
-        manifest = library / "steamapps/appmanifest_7940.acf"
+        manifest = library / f"steamapps/appmanifest_{app_id}.acf"
         if not manifest.is_file():
             continue
         match = re.search(r'"installdir"\s+"([^"\n]+)"', manifest.read_text())
         if match and Path(match[1]).name == match[1]:
-            source = library / "steamapps/common" / match[1] / "Call of Duty 4.app"
+            source = library / "steamapps/common" / match[1] / f"{title}.app"
             if source.is_dir():
                 return source.resolve()
-    raise ValueError("Steam's Mac installation of app 7940 was not found; pass SOURCE_APP=/path/to/Call of Duty 4.app")
+    raise ValueError(f"Steam's Mac installation of app {app_id} was not found; pass SOURCE_APP=/path/to/{title}.app")
 
 
-def validate_source(source, mode):
+def validate_source(source, mode, game="cod4"):
+    multiplayer = f"{GAMES[game]['title']} Multiplayer.app"
     contents = source / "Contents"
-    selected = contents if mode == "sp" or source.name == "Call of Duty 4 Multiplayer.app" else contents / "Call of Duty 4 Multiplayer.app/Contents"
+    selected = contents if mode == "sp" or source.name == multiplayer else contents / multiplayer / "Contents"
     info_path = selected / "Info.plist"
     if not info_path.is_file():
         raise ValueError(f"Missing Mac app Info.plist: {info_path}")
@@ -76,10 +95,10 @@ def validate_source(source, mode):
     name = info.get('CFBundleExecutable')
     if not isinstance(name, str) or name in ('', '.', '..') or '/' in name or '\\' in name:
         raise ValueError("Invalid CFBundleExecutable in the Mac app Info.plist")
-    if info.get('LP32GeneratedGame') == 'cod4':
+    if info.get('LP32GeneratedGame') in GAMES:
         raise ValueError("Choose the original Mac game app, not a converted copy")
     image = selected / "MacOS" / name
-    required = [image, game_data(source) / 'main/iw_00.iwd']
+    required = [image, game_data(source, game) / 'main/iw_00.iwd']
     missing = [str(p) for p in required if not p.is_file()]
     if missing:
         raise ValueError("Missing Mac game files: " + ", ".join(missing))
@@ -87,9 +106,9 @@ def validate_source(source, mode):
     return selected, image, info
 
 
-def validate_destination(source, bundle):
+def validate_destination(source, bundle, game="cod4"):
     source, destination = source.resolve(), bundle.resolve()
-    if (source.name == 'Call of Duty 4 Multiplayer.app' and source.parent.name == 'Contents'
+    if (source.name == f"{GAMES[game]['title']} Multiplayer.app" and source.parent.name == 'Contents'
             and source.parent.parent.suffix == '.app'):
         source = source.parent.parent
     if source == destination or source in destination.parents or destination in source.parents:
@@ -97,8 +116,8 @@ def validate_destination(source, bundle):
     if bundle.exists():
         info_path = bundle / "Contents/Info.plist"
         info = plistlib.loads(info_path.read_bytes()) if info_path.is_file() else {}
-        if info.get("LP32GeneratedGame") != "cod4":
-            raise ValueError("Refusing to replace a directory that is not a generated COD4 compatibility app")
+        if info.get("LP32GeneratedGame") != game:
+            raise ValueError(f"Refusing to replace a directory that is not a generated {GAMES[game]['stem']} compatibility app")
 
 
 def run(*args):
@@ -109,12 +128,14 @@ def ditto(source, target):
     run("ditto", "--noextattr", "--noqtn", source, target)
 
 
-def build(source, mode, loader, bundle, inactive, runtime, glmetal=package_glmetal.DEFAULT_BUILD):
-    selected, image, info = validate_source(source, mode)
-    validate_destination(source, bundle)
+def build(source, mode, loader, bundle, inactive, runtime, glmetal=package_glmetal.DEFAULT_BUILD, game="cod4"):
+    title, stem = GAMES[game]["title"], GAMES[game]["stem"]
+    selected, image, info = validate_source(source, mode, game)
+    validate_destination(source, bundle, game)
     if not loader.is_file():
         raise ValueError(f"Missing loader: {loader}")
-    package_glmetal.validate(glmetal)
+    if GAMES[game]["glmetal"]:
+        package_glmetal.validate(glmetal)
     from prepare_guest_runtime import LIBRARIES, sha256
     for name, (_, digest) in LIBRARIES.items():
         if not (runtime / name).is_file() or sha256(runtime / name) != digest:
@@ -122,10 +143,10 @@ def build(source, mode, loader, bundle, inactive, runtime, glmetal=package_glmet
     steam_library = library(selected, 'libsteam_api.dylib')
     steam_image = macho_slice(steam_library.read_bytes(), 0x01000007) if steam_library else None
     bink_source = library(selected, 'libBinkMachOx86.dylib')
-    data_source = game_data(source)
+    data_source = game_data(source, game)
     suffix = "MP" if mode == "mp" else ""
     bundle.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".cod4-stage-", dir=bundle.parent) as tmp:
+    with tempfile.TemporaryDirectory(prefix=f".{game}-stage-", dir=bundle.parent) as tmp:
         staged = Path(tmp) / bundle.name
         contents = staged / "Contents"
         for name in ("MacOS", "SharedSupport", "Resources"):
@@ -138,9 +159,9 @@ def build(source, mode, loader, bundle, inactive, runtime, glmetal=package_glmet
                         ditto(item, contents / "Resources" / item.name)
             else:
                 ditto(resources, contents / "Resources")
-        ditto(data_source, contents / "Call of Duty 4 Data")
-        shutil.copy2(loader, contents / f"MacOS/COD4{suffix}Compat")
-        target = contents / f"SharedSupport/COD4{suffix}.image"
+        ditto(data_source, contents / data_source.name)
+        shutil.copy2(loader, contents / f"MacOS/{stem}{suffix}Compat")
+        target = contents / f"SharedSupport/{stem}{suffix}.image"
         target.write_bytes(macho_slice(image.read_bytes(), 7))
         target.chmod(0o644)
         # The original i386 Bink runs as guest code; the Steam SDK runs through
@@ -156,20 +177,21 @@ def build(source, mode, loader, bundle, inactive, runtime, glmetal=package_glmet
             run("codesign", "--force", "--sign", "-", steam)
         source_id = info.get('CFBundleIdentifier')
         if not isinstance(source_id, str) or not source_id:
-            source_id = f'org.32bitgoofy.cod4.{mode}'
-        info.update(CFBundleExecutable=f"COD4{suffix}Compat",
+            source_id = f'org.32bitgoofy.{game}.{mode}'
+        info.update(CFBundleExecutable=f"{stem}{suffix}Compat",
                     CFBundleIdentifier=source_id + '.compat',
-                    CFBundleName=f"Call of Duty 4{(' Multiplayer' if suffix else '')} (Compatibility)",
-                    CFBundleDisplayName=f"Call of Duty 4{(' Multiplayer' if suffix else '')} (Compatibility)",
+                    CFBundleName=f"{title}{(' Multiplayer' if suffix else '')} (Compatibility)",
+                    CFBundleDisplayName=f"{title}{(' Multiplayer' if suffix else '')} (Compatibility)",
                     LSMinimumSystemVersion="11.0", NSHighResolutionCapable=False,
-                    LP32GeneratedGame="cod4", LP32ContinueWhenInactive=bool(inactive))
+                    LP32GeneratedGame=game, LP32ContinueWhenInactive=bool(inactive))
         if mode == "mp":
             # The original NSURLDownload code fetches server-selected mods
             # over HTTP. Linking our host against a modern SDK otherwise adds
             # ATS restrictions and fails these downloads with error -1022.
             info["NSAppTransportSecurity"] = {"NSAllowsArbitraryLoads": True}
-        package_glmetal.install(glmetal, contents / "Frameworks/GLMetal", contents / "Resources/GLMetal-build-info.json")
-        package_glmetal.configure(info)
+        if GAMES[game]["glmetal"]:
+            package_glmetal.install(glmetal, contents / "Frameworks/GLMetal", contents / "Resources/GLMetal-build-info.json")
+            package_glmetal.configure(info)
         (contents / "Info.plist").write_bytes(plistlib.dumps(info))
         run("codesign", "--force", "--sign", "-", staged)
         run("codesign", "--verify", "--strict", staged)
@@ -182,11 +204,12 @@ def build(source, mode, loader, bundle, inactive, runtime, glmetal=package_glmet
             if previous.exists():
                 previous.rename(bundle)
             raise
-    print(f"COD4 {mode} compatibility bundle: {bundle}")
+    print(f"{stem} {mode} compatibility bundle: {bundle}")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--game", choices=GAMES, default="cod4")
     parser.add_argument("--source-app", default="")
     parser.add_argument("--mode", choices=EXECUTABLES, default="sp")
     parser.add_argument("--loader", type=Path, default=Path("build/game_loader"))
@@ -196,8 +219,9 @@ def main():
     parser.add_argument("--glmetal", type=Path, default=package_glmetal.DEFAULT_BUILD, help="Directory containing the built GLMetal driver and compiler")
     args = parser.parse_args()
     try:
-        source = Path(args.source_app).resolve() if args.source_app else steam_source()
-        build(source, args.mode, args.loader.resolve(), args.bundle.absolute(), args.continue_when_inactive, args.runtime.resolve(), args.glmetal.resolve())
+        source = Path(args.source_app).resolve() if args.source_app else steam_source(game=args.game)
+        build(source, args.mode, args.loader.resolve(), args.bundle.absolute(), args.continue_when_inactive,
+              args.runtime.resolve(), args.glmetal.resolve(), args.game)
     except ValueError as error:
         parser.error(str(error))
 

@@ -653,9 +653,7 @@ static int agl_dispatch(const char *name, const uint32_t *a, uint64_t *out) {
     return 1;
   }
   if (IS("_aglSetDrawable")) {
-    if (lp32_gl_backend_is_replacement() ||
-        lp32_profile()->title == LP32_TITLE_COD4 ||
-        lp32_profile()->title == LP32_TITLE_COD4_MP) {
+    if (lp32_gl_backend_is_replacement() || lp32_title_is_cod_carbon(lp32_profile()->title)) {
       void *cgl = NULL;
       uint8_t (*get)(void *, void **) = lp32_gl_backend_agl_symbol("aglGetCGLContext");
       *out = get && get(unwrap(a[0]), &cgl) && carbon_ui_bind_gl(unwrap(a[0]), cgl, unwrap(a[1]));
@@ -696,7 +694,7 @@ static int agl_dispatch(const char *name, const uint32_t *a, uint64_t *out) {
   }
   if (IS("_aglChoosePixelFormat")) {
     const int *attributes=P(2);int window_attributes[128];
-    if ((lp32_profile()->title == LP32_TITLE_COD4 || lp32_profile()->title == LP32_TITLE_COD4_MP) &&
+    if (lp32_title_is_cod_carbon(lp32_profile()->title) &&
         lp32_agl_window_attributes(attributes,128,window_attributes,128))
       attributes=window_attributes;
     *out = wrap(F(void *, const void *, int, const int *)(NULL, 0, attributes));
@@ -960,7 +958,7 @@ int carbon_bridge32_dispatch(const char *name, const uint32_t *a,
         InstallEventHandler(target, draw_window_background, 1, &type, window,
                             &window->background_handler);
       }
-      if (lp32_profile()->title == LP32_TITLE_COD4 || lp32_profile()->title == LP32_TITLE_COD4_MP)
+      if (lp32_title_is_cod_carbon(lp32_profile()->title))
         carbon_ui_paint(window->host, window->background_image);
       else carbon_ui_use_native(window->host);
       ((int32_t (*)(void *, bool))symbol("_HIViewSetNeedsDisplay"))(root, true);
@@ -1486,13 +1484,26 @@ int carbon_bridge32_dispatch(const char *name, const uint32_t *a,
     return 1;
   }
   if (IS("_InitCursor") || IS("_ShowCursor") || IS("_HideCursor")) {
-    if (lp32_profile()->title == LP32_TITLE_COD4 || lp32_profile()->title == LP32_TITLE_COD4_MP)
+    if (lp32_title_is_cod_carbon(lp32_profile()->title))
       return objc_bridge32_dispatch(name, a, out);
     if (!getenv("LP32_BACKGROUND_TEST")) {
       void (*cursor)(void) = symbol(name);
       if (cursor)
         cursor();
     }
+    *out = 0;
+    return 1;
+  }
+  if (IS("_StringToNum")) {
+    /* Not in 64-bit Carbon. Like the Toolbox routine: optional sign, then the
+       low four bits of every character as a decimal digit, unvalidated. */
+    const uint8_t *text = P(0);
+    uint32_t value = 0;
+    unsigned length = text ? text[0] : 0, i = 1;
+    bool negative = length && text[1] == '-';
+    if (length && (text[1] == '-' || text[1] == '+')) ++i;
+    for (; i <= length; ++i) value = value * 10 + (text[i] & 0x0f);
+    if (a[1]) *(uint32_t *)P(1) = negative ? 0 - value : value;
     *out = 0;
     return 1;
   }
@@ -2426,7 +2437,7 @@ int carbon_bridge32_dispatch(const char *name, const uint32_t *a,
   if (IS("_ShowWindow") || IS("_HideWindow") || IS("_DisposeWindow") ||
       IS("_SelectWindow")) {
     if (IS("_SelectWindow") &&
-        (lp32_profile()->title == LP32_TITLE_COD4 || lp32_profile()->title == LP32_TITLE_COD4_MP) &&
+        lp32_title_is_cod_carbon(lp32_profile()->title) &&
         carbon_ui_select(unwrap(a[0]))) {
       *out = 0;
       return 1;
@@ -2712,7 +2723,7 @@ int carbon_bridge32_dispatch(const char *name, const uint32_t *a,
     return 1;
   }
   if (IS("_DrawMenuBar") || IS("_HideMenuBar") || IS("_ShowMenuBar")) {
-    if ((lp32_profile()->title == LP32_TITLE_COD4 || lp32_profile()->title == LP32_TITLE_COD4_MP) &&
+    if (lp32_title_is_cod_carbon(lp32_profile()->title) &&
         !IS("_DrawMenuBar")) {
       /* Persist the guest request across native AppKit activation changes. */
       carbon_ui_set_menu_bar_visible(IS("_ShowMenuBar"));

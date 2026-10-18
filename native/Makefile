@@ -3,16 +3,19 @@ BUILD_DIR := build
 CONTINUE_WHEN_INACTIVE ?= 0
 
 # One loader serves every supported title; the bundle targets pick the title
-# with GAME=pirates (default), clonewars, marvel, saga, cod4, cod4mp, mw2, mw2mp,
-# mw3 or mw3mp.
+# with GAME=pirates (default), clonewars, marvel, saga, cod2, cod2mp, cod4, cod4mp,
+# mw2, mw2mp, mw3 or mw3mp.
 GAME ?= pirates
-ifneq ($(filter $(GAME),cod cod4 cod4mp),)
-COD4_MODE := $(if $(filter cod4mp,$(GAME)),mp,sp)
+ifneq ($(filter $(GAME),cod cod2 cod2mp cod4 cod4mp),)
+# Aspyr's Carbon-era ports share tools/bundle_cod4.py.
+COD_GAME := $(if $(filter cod2 cod2mp,$(GAME)),cod2,cod4)
+COD_STEM := $(if $(filter cod2,$(COD_GAME)),COD2,COD4)
+COD4_MODE := $(if $(filter cod2mp cod4mp,$(GAME)),mp,sp)
 COD4_SUFFIX := $(if $(filter mp,$(COD4_MODE)),MP,)
 SOURCE_APP ?=
-BUNDLE := $(BUILD_DIR)/COD4$(COD4_SUFFIX)-Compat.app
-IMAGE_NAME := COD4$(COD4_SUFFIX).image
-LOADER_NAME := COD4$(COD4_SUFFIX)Compat
+BUNDLE := $(BUILD_DIR)/$(COD_STEM)$(COD4_SUFFIX)-Compat.app
+IMAGE_NAME := $(COD_STEM)$(COD4_SUFFIX).image
+LOADER_NAME := $(COD_STEM)$(COD4_SUFFIX)Compat
 CG_SOURCE :=
 ICON_NAME := $(if $(filter mp,$(COD4_MODE)),Game_mp.icns,Game.icns)
 GUEST_RUNTIME_DIR ?= $(BUILD_DIR)/guest-runtime
@@ -113,7 +116,7 @@ GAME_DATA := GAME.DAT GAME0.DAT GAME1.DAT GAME2.DAT GAME3.DAT GAME4.DAT
 ICON := icons/LEGOPirates.icns
 ICON_NAME := icon.icns
 else
-$(error Unknown GAME "$(GAME)"; choose pirates, clonewars, marvel, saga, cod4, cod4mp, mw2, mw2mp, mw3 or mw3mp)
+$(error Unknown GAME "$(GAME)"; choose pirates, clonewars, marvel, saga, cod2, cod2mp, cod4, cod4mp, mw2, mw2mp, mw3 or mw3mp)
 endif
 CG_SOURCE ?= $(SOURCE_CONTENTS)/Library/Frameworks/Cg.framework
 # Python for the Pirates unpacker.  By default a venv under $(BUILD_DIR) with
@@ -259,7 +262,7 @@ mode-switch-stress: $(BUILD_DIR)/mode_switch_stress
 run: $(BUILD_DIR)/mode32_probe
 	arch -x86_64 ./$(BUILD_DIR)/mode32_probe
 
-ifneq ($(filter $(GAME),cod cod4 cod4mp mw2 mw2mp mw3 mw3mp),)
+ifneq ($(filter $(GAME),cod cod2 cod2mp cod4 cod4mp mw2 mw2mp mw3 mw3mp),)
 run-game: promote-loader
 	arch -x86_64 "./$(BUNDLE)/Contents/MacOS/$(LOADER_NAME)"
 else
@@ -284,9 +287,9 @@ saga-update:
 	mkdir -p $(BUILD_DIR)/saga-update
 	ditto -x -k "$(SAGA_UPDATE_ZIP)" $(BUILD_DIR)/saga-update
 
-ifneq ($(filter $(GAME),cod cod4 cod4mp),)
+ifneq ($(filter $(GAME),cod cod2 cod2mp cod4 cod4mp),)
 bundle: $(BUILD_DIR)/game_loader glmetal-lib tools/bundle_cod4.py tools/prepare_guest_runtime.py tools/package_glmetal.py
-	python3 tools/bundle_cod4.py --source-app "$(SOURCE_APP)" --mode "$(COD4_MODE)" --loader "$(BUILD_DIR)/game_loader" --bundle "$(BUNDLE)" --runtime "$(GUEST_RUNTIME_DIR)" --continue-when-inactive "$(CONTINUE_WHEN_INACTIVE)" --glmetal "$(GLMETAL_BUILD)"
+	python3 tools/bundle_cod4.py --game "$(COD_GAME)" --source-app "$(SOURCE_APP)" --mode "$(COD4_MODE)" --loader "$(BUILD_DIR)/game_loader" --bundle "$(BUNDLE)" --runtime "$(GUEST_RUNTIME_DIR)" --continue-when-inactive "$(CONTINUE_WHEN_INACTIVE)" --glmetal "$(GLMETAL_BUILD)"
 else ifneq ($(filter $(GAME),mw2 mw2mp mw3 mw3mp),)
 bundle: $(BUILD_DIR)/game_loader glmetal-lib tools/bundle_mw2.py tools/bundle_cod4.py tools/package_glmetal.py
 	python3 tools/bundle_mw2.py --game "$(MW2_GAME)" --source-app "$(SOURCE_APP)" --mode "$(MW2_MODE)" --loader "$(BUILD_DIR)/game_loader" --bundle "$(BUNDLE)" --continue-when-inactive "$(CONTINUE_WHEN_INACTIVE)" --glmetal "$(GLMETAL_BUILD)"

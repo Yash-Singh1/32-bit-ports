@@ -43,6 +43,29 @@ class BundleTests(unittest.TestCase):
         (library / 'steamapps/appmanifest_7940.acf').write_text('"AppState" { "installdir" "Call of Duty 4" }')
         self.assertEqual(cod.steam_source(steam), self.source.resolve())
 
+    def test_cod2_discovery_and_nested_multiplayer(self):
+        steam = self.root / 'Steam'
+        source = steam / 'steamapps/common/Call of Duty 2/Call of Duty 2.app'
+        mp = source / 'Contents/Call of Duty 2 Multiplayer.app/Contents'
+        for contents, name in ((source / 'Contents', 'Call of Duty 2'), (mp, 'Call of Duty 2 Multiplayer')):
+            (contents / 'MacOS').mkdir(parents=True)
+            (contents / 'MacOS' / name).write_bytes(bytes.fromhex('cefaedfe07000000') + bytes(20))
+            (contents / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleExecutable': name}))
+        (source / 'Contents/Call of Duty 2 Data/main').mkdir(parents=True)
+        (source / 'Contents/Call of Duty 2 Data/main/iw_00.iwd').write_bytes(b'fixture')
+        (steam / 'steamapps/appmanifest_2630.acf').write_text('"AppState" { "installdir" "Call of Duty 2" }')
+        self.assertEqual(cod.steam_source(steam, game='cod2'), source.resolve())
+        with self.assertRaisesRegex(ValueError, 'app 7940'):
+            cod.steam_source(steam)
+        self.assertEqual(cod.validate_source(source, 'mp', 'cod2')[0], mp)
+        with self.assertRaisesRegex(ValueError, 'Missing Mac app Info.plist'):
+            cod.validate_source(source, 'mp')
+        output = self.root / 'COD2-Compat.app'
+        (output / 'Contents').mkdir(parents=True)
+        (output / 'Contents/Info.plist').write_bytes(plistlib.dumps({'LP32GeneratedGame': 'cod4'}))
+        with self.assertRaisesRegex(ValueError, 'generated COD2'):
+            cod.validate_destination(source, output, 'cod2')
+
     def test_discovery_rejects_manifest_traversal(self):
         steam = self.root / 'Steam'
         (steam / 'steamapps').mkdir(parents=True)

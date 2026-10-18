@@ -839,8 +839,9 @@ static uint64_t extra_glTransformFeedbackVaryings(const uint32_t *a,uint32_t sit
     for(int32_t i=0;i<count;++i)names[i]=(void *)(uintptr_t)guest[i];
     glTransformFeedbackVaryings(a[0],count,names,a[3]);free(names);return 0;
 }
-/* MW2's legacy-context entry points. Integer and pointer arguments widen
- * losslessly into SysV integer slots, so one forwarder serves every
+/* MW2's legacy-context entry points, then COD2's fixed-function, NV combiner
+ * and APPLE vertex-array/fence entry points. Integer and pointer arguments
+ * widen losslessly into SysV integer slots, so one forwarder serves every
  * signature in mw2_integer_calls; float, string-array and sync-object
  * signatures have their own adapters. */
 typedef uint64_t (*integer_gl_fn)(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,
@@ -855,6 +856,11 @@ static const struct { const char *name; unsigned count; } mw2_integer_calls[] = 
     {"glUniform2iv",3},{"glUniform3iv",3},{"glUniformBufferEXT",3},
     {"glUniformMatrix2fv",4},{"glUniformMatrix3fv",4},{"glUniformMatrix4fv",4},
     {"glValidateProgram",1},
+    {"glBindVertexArrayAPPLE",1},{"glCombinerParameterfvNV",2},
+    {"glCombinerStageParameterfvNV",3},{"glFinishFenceAPPLE",1},
+    {"glFlushVertexArrayRangeAPPLE",2},{"glGenVertexArraysAPPLE",2},
+    {"glPointParameterfvARB",2},{"glTexEnvi",3},
+    {"glVertexArrayParameteriAPPLE",2},{"glVertexArrayRangeAPPLE",2},
 };
 enum { kMw2IntegerCallCount = sizeof(mw2_integer_calls)/sizeof(mw2_integer_calls[0]) };
 static integer_gl_fn mw2_integer_symbols[kMw2IntegerCallCount];
@@ -871,11 +877,16 @@ MW2_INTEGER_CALL(4) MW2_INTEGER_CALL(5) MW2_INTEGER_CALL(6) MW2_INTEGER_CALL(7)
 MW2_INTEGER_CALL(8) MW2_INTEGER_CALL(9) MW2_INTEGER_CALL(10) MW2_INTEGER_CALL(11)
 MW2_INTEGER_CALL(12) MW2_INTEGER_CALL(13) MW2_INTEGER_CALL(14) MW2_INTEGER_CALL(15)
 MW2_INTEGER_CALL(16) MW2_INTEGER_CALL(17) MW2_INTEGER_CALL(18) MW2_INTEGER_CALL(19)
+MW2_INTEGER_CALL(20) MW2_INTEGER_CALL(21) MW2_INTEGER_CALL(22) MW2_INTEGER_CALL(23)
+MW2_INTEGER_CALL(24) MW2_INTEGER_CALL(25) MW2_INTEGER_CALL(26) MW2_INTEGER_CALL(27)
+MW2_INTEGER_CALL(28) MW2_INTEGER_CALL(29)
 static const lp32_fast_import_fn mw2_integer_handlers[kMw2IntegerCallCount] = {
     mw2_integer_0,mw2_integer_1,mw2_integer_2,mw2_integer_3,mw2_integer_4,mw2_integer_5,
     mw2_integer_6,mw2_integer_7,mw2_integer_8,mw2_integer_9,mw2_integer_10,mw2_integer_11,
     mw2_integer_12,mw2_integer_13,mw2_integer_14,mw2_integer_15,mw2_integer_16,
-    mw2_integer_17,mw2_integer_18,mw2_integer_19,
+    mw2_integer_17,mw2_integer_18,mw2_integer_19,mw2_integer_20,mw2_integer_21,
+    mw2_integer_22,mw2_integer_23,mw2_integer_24,mw2_integer_25,mw2_integer_26,
+    mw2_integer_27,mw2_integer_28,mw2_integer_29,
 };
 _Static_assert(sizeof(mw2_integer_handlers)/sizeof(mw2_integer_handlers[0])==kMw2IntegerCallCount,
                "one handler per MW2 integer call");
@@ -910,11 +921,17 @@ static uint64_t extra_glDrawElementsInstancedARB(const uint32_t *a,uint32_t site
 }
 extern void glTexCoord2f(float,float);
 extern void glVertex2f(float,float);
+extern void glOrtho(double,double,double,double,double,double);
 static uint64_t extra_glTexCoord2f(const uint32_t *a,uint32_t site){
     (void)site;glTexCoord2f(f32(a[0]),f32(a[1]));return 0;
 }
 static uint64_t extra_glVertex2f(const uint32_t *a,uint32_t site){
     (void)site;glVertex2f(f32(a[0]),f32(a[1]));return 0;
+}
+/* GLU defines gluOrtho2D as glOrtho with near -1 and far 1; issuing it
+   here keeps it on the selected GL backend. */
+static uint64_t extra_gluOrtho2D(const uint32_t *a,uint32_t site){
+    (void)site;glOrtho(f64(a),f64(a+2),f64(a+4),f64(a+6),-1.0,1.0);return 0;
 }
 static uint64_t extra_glTransformFeedbackVaryingsEXT(const uint32_t *a,uint32_t site){
     (void)site;static void (*fn)(uint32_t,int32_t,const char **,uint32_t);
@@ -976,6 +993,7 @@ lp32_fast_import_fn gl_core_bridge32_fast_import(const char *name){
     if(!strcmp(name,"glDrawElementsInstancedARB"))return extra_glDrawElementsInstancedARB;
     if(!strcmp(name,"glTexCoord2f"))return extra_glTexCoord2f;
     if(!strcmp(name,"glVertex2f"))return extra_glVertex2f;
+    if(!strcmp(name,"gluOrtho2D"))return extra_gluOrtho2D;
     if(!strcmp(name,"glTransformFeedbackVaryingsEXT"))return extra_glTransformFeedbackVaryingsEXT;
     if(!strcmp(name,"glFenceSync"))return extra_glFenceSync;
     if(!strcmp(name,"glDeleteSync"))return extra_glDeleteSync;

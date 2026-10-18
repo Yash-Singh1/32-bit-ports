@@ -59,6 +59,30 @@ int main(void)
         assert(lp32_profile()->main_address == 0);
         assert(lp32_profile()->loading_screen == NULL);
     }
+    const char *cod2_names[] = {"cod2", "cod2mp"};
+    for (unsigned i = 0; i < 2; ++i) {
+        const struct lp32_game_profile *p = lp32_profile_named(cod2_names[i]);
+        assert(p && p->steam_app_id == 2630 && p->callee_pops_struct_return);
+        assert(p->title == (i ? LP32_TITLE_COD2_MP : LP32_TITLE_COD2));
+        assert(lp32_title_is_cod_carbon(p->title) && !lp32_title_is_mw_sdl(p->title));
+        assert(!p->controller && !p->startup_latch && !p->code_patches && !p->loading_screen);
+        assert(p->depth_capability_check.length == 4 && p->license_log_return_address);
+        struct macho_image32 image = {.entry_eip = p->entry_eip, .max_address = p->image_end,
+                                     .import_count = 1};
+        image.imports[0].name = "_SteamAPI_Init";
+        assert(lp32_profile_select(&image, NULL) == 0 && lp32_profile() == p);
+        ++image.entry_eip;
+        assert(lp32_profile_select(&image, NULL) == -1);
+        /* An untested build keeps the title but none of the tested addresses. */
+        image.import_count = 0;
+        assert(lp32_profile_select(&image, i ? "COD2MP.image" : "COD2.image") == 0);
+        assert(lp32_profile()->title == p->title && lp32_profile()->steam_app_id == 0);
+        assert(!lp32_profile()->main_address && !lp32_profile()->license_log_return_address);
+        assert(lp32_profile()->depth_capability_check.length == 0);
+    }
+    assert(lp32_title_is_cod_carbon(LP32_TITLE_COD4) && lp32_title_is_cod_carbon(LP32_TITLE_COD4_MP));
+    assert(!lp32_title_is_cod_carbon(LP32_TITLE_MW2) && !lp32_title_is_cod_carbon(LP32_TITLE_MARVEL));
+    assert(lp32_profile_named("cod2-mp") == lp32_profile_named("cod2mp"));
     const char *mw2_names[] = {"mw2", "mw2mp"};
     for (unsigned i = 0; i < 2; ++i) {
         const struct lp32_game_profile *p = lp32_profile_named(mw2_names[i]);

@@ -2210,6 +2210,13 @@ static void install_window_test_input(NSWindow *window)
     [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
 }
 
+/* Carbon presenters (COD2/COD4) post the same scripted keys to their window;
+   the Carbon event loop receives them from the shared AppKit queue. */
+void objc_bridge32_install_test_input(void *window)
+{
+    install_window_test_input((NSWindow *)window);
+}
+
 /*
  * ScreenWidth, ScreenHeight, and ScreenRefreshRate are populated from
  * pcconfig.txt by the recovered setters at 0x252d40, 0x252d10, and 0x252c80.
@@ -8067,8 +8074,7 @@ static void release_provider_data(void *raw,const void *data,size_t size) {
 static CFStringRef cod4_preferences_application(uint32_t value)
 {
     const char *domain = getenv("LP32_COD4_PREFERENCES_ID");
-    if (domain && domain[0] && (lp32_profile()->title == LP32_TITLE_COD4 ||
-                              lp32_profile()->title == LP32_TITLE_COD4_MP))
+    if (domain && domain[0] && lp32_title_is_cod_carbon(lp32_profile()->title))
         return (CFStringRef)[NSString stringWithUTF8String:domain];
     return (CFStringRef)object_for_argument(value);
 }
@@ -8267,7 +8273,7 @@ void objc_bridge32_carbon_focus_changed(int active) {
 
 void objc_bridge32_record_mouse_position(int16_t horizontal, int16_t vertical) {
     if (lp32_suppress_background_input()) return;
-    if (lp32_profile()->title != LP32_TITLE_COD4 && lp32_profile()->title != LP32_TITLE_COD4_MP) return;
+    if (!lp32_title_is_cod_carbon(lp32_profile()->title)) return;
     carbon_mouse_event_baseline = [NSEvent mouseLocation];
     carbon_mouse_event_point[0] = vertical;
     carbon_mouse_event_point[1] = horizontal;
@@ -8384,7 +8390,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
                                        const uint32_t *arguments,
                                        uint64_t *result)
 {
-    if ((lp32_profile()->title == LP32_TITLE_COD4 || lp32_profile()->title == LP32_TITLE_COD4_MP) &&
+    if (lp32_title_is_cod_carbon(lp32_profile()->title) &&
         (!strcmp(import_name, "_HideCursor") || !strcmp(import_name, "_ShowCursor") ||
          !strcmp(import_name, "_InitCursor") || !strcmp(import_name, "_CGCursorIsVisible") ||
          !strcmp(import_name, "_CGDisplayHideCursor") || !strcmp(import_name, "_CGDisplayShowCursor"))) {
@@ -10038,7 +10044,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         maybe_dump_gl_program(arguments[0], source_size, source);
         char *expanded_outputs = NULL;
         char *normalized_lines = NULL;
-        if ((lp32_profile()->title == LP32_TITLE_COD4 || lp32_profile()->title == LP32_TITLE_COD4_MP) &&
+        if (lp32_title_is_cod_carbon(lp32_profile()->title) &&
             arguments[1] == GL_PROGRAM_FORMAT_ASCII_ARB && source_size > 0) {
             const char *vendor = (const char *)glGetString(GL_VENDOR);
             if (vendor && strstr(vendor, "Apple")) {
@@ -10403,8 +10409,8 @@ static int objc_bridge32_dispatch_body(const char *import_name,
     }
     if (LP32_NAME_IS(import_name, import_length, "_GetGlobalMouse")) {
         if (arguments[0]) {
-            bool cod4 = lp32_profile()->title == LP32_TITLE_COD4 || lp32_profile()->title == LP32_TITLE_COD4_MP;
-            if (cod4 && lp32_suppress_background_input()) {
+            bool cod = lp32_title_is_cod_carbon(lp32_profile()->title);
+            if (cod && lp32_suppress_background_input()) {
                 memcpy((void *)(uintptr_t)arguments[0], cod4_mouse_position, sizeof(cod4_mouse_position));
                 *result = 0;
                 return 1;
@@ -10418,7 +10424,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
                 else carbon_mouse_event_valid = false;
             }
             memcpy((void *)(uintptr_t)arguments[0], point, sizeof(point));
-            if (cod4) { memcpy(cod4_mouse_position, point, sizeof(point)); cod4_mouse_position_valid = true; }
+            if (cod) { memcpy(cod4_mouse_position, point, sizeof(point)); cod4_mouse_position_valid = true; }
             if (getenv("LP32_TRACE_INPUT")) {
                 static unsigned samples;
                 if (!(samples++ % 120)) fprintf(stderr, "compat32: global mouse %d,%d\n", point[1], point[0]);
@@ -10463,7 +10469,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         *result = 0; return 1;
     }
     if (LP32_NAME_IS(import_name, import_length, "_CGAssociateMouseAndMouseCursorPosition")) {
-        if (lp32_profile()->title == LP32_TITLE_COD4 || lp32_profile()->title == LP32_TITLE_COD4_MP) {
+        if (lp32_title_is_cod_carbon(lp32_profile()->title)) {
             cod4_mouse_associated = arguments[0] != 0;
             cod4_apply_pointer_state();
             *result = 0; return 1;
@@ -10479,7 +10485,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
     if (LP32_NAME_IS(import_name, import_length, "_CGWarpMouseCursorPosition")) {
         const float *xy = (const void *)arguments;
         carbon_mouse_event_valid = false;
-        if (lp32_profile()->title == LP32_TITLE_COD4 || lp32_profile()->title == LP32_TITLE_COD4_MP) {
+        if (lp32_title_is_cod_carbon(lp32_profile()->title)) {
             cod4_mouse_warp = CGPointMake(xy[0], xy[1]);
             cod4_mouse_warp_valid = true;
             cod4_mouse_position[0] = (int16_t)xy[1]; cod4_mouse_position[1] = (int16_t)xy[0];

@@ -401,6 +401,42 @@ static const struct lp32_game_profile cod4_mp_profile = {
     .thread_argument_is_direct = 1,
 };
 
+/* Aspyr's Steam 1.3.1 (111540) Mac release, app 2630. Both executables are
+   unstripped; main and the proof-of-purchase puts are named in the symbols.
+   CDisplayInfo accepts a renderer only if kCGLRPDepthModes has the 24-bit
+   bit (testb $0x08 on its second byte); current Apple GPUs offer 32-bit. */
+static const struct lp32_game_profile cod2_profile = {
+    .title = LP32_TITLE_COD2,
+    .name = "COD2",
+    .display_name = "Call of Duty 2",
+    .log_directory = "COD2Compat",
+    .image_file = "COD2.image",
+    .callee_pops_struct_return = 1,
+    .depth_capability_check = {0x000050b1, {0xf6, 0x45, 0xc1, 0x08}, 4},
+    .license_log_return_address = 0x0021ba27,
+    .entry_eip = 0x000039c8,
+    .image_end = 0x01e22000,
+    .main_address = 0x0021ba70,
+    .steam_app_id = 2630,
+    .thread_argument_is_direct = 1,
+};
+
+static const struct lp32_game_profile cod2_mp_profile = {
+    .title = LP32_TITLE_COD2_MP,
+    .name = "COD2MP",
+    .display_name = "Call of Duty 2 Multiplayer",
+    .log_directory = "COD2MPCompat",
+    .image_file = "COD2MP.image",
+    .callee_pops_struct_return = 1,
+    .depth_capability_check = {0x000051f1, {0xf6, 0x45, 0xc1, 0x08}, 4},
+    .license_log_return_address = 0x00234987,
+    .entry_eip = 0x000034f8,
+    .image_end = 0x01c15000,
+    .main_address = 0x002349d0,
+    .steam_app_id = 2630,
+    .thread_argument_is_direct = 1,
+};
+
 /* Aspyr's WaitForSingleObject shim treats any timeout below 2 ms as a poll
    (`cmp $2,%ebx; jb timeout`). MW2's render workers wait on the backend
    event with a 1 ms timeout, so they spin on the event mutex, contending
@@ -629,6 +665,8 @@ static const struct lp32_game_profile *const known_profiles[] = {
     &saga_steam_profile,
     &cod4_profile,
     &cod4_mp_profile,
+    &cod2_profile,
+    &cod2_mp_profile,
     &mw2_profile,
     &mw2_mp_profile,
     &mw3_profile,
@@ -636,13 +674,19 @@ static const struct lp32_game_profile *const known_profiles[] = {
 };
 
 static const struct lp32_game_profile *current_profile = &unknown_profile;
-static struct lp32_game_profile cod4_detected_profile;
+static struct lp32_game_profile cod_detected_profile;
 
-static bool tested_cod4_image(const char *path, enum lp32_title title)
+/* SHA-256 of the Steam executables whose fixed addresses the profiles use. */
+static bool tested_cod_image(const char *path, enum lp32_title title)
 {
-    const char *expected = title == LP32_TITLE_COD4 ?
-        "43629c7f2f1b6f891e93c134f3101dbfb9fc4b46cabb1491e90437a450208870" :
-        "f90ec11a0822628aac0c2f788d980967ad333405b2fec5f3ecfbca1e3d8d1374";
+    const char *expected;
+    switch (title) {
+    case LP32_TITLE_COD4: expected = "43629c7f2f1b6f891e93c134f3101dbfb9fc4b46cabb1491e90437a450208870"; break;
+    case LP32_TITLE_COD4_MP: expected = "f90ec11a0822628aac0c2f788d980967ad333405b2fec5f3ecfbca1e3d8d1374"; break;
+    case LP32_TITLE_COD2: expected = "9c4592fd0bc6d2d04d82162df52cbad3b318c01fd919fbb96d6fa3399adf6a0a"; break;
+    case LP32_TITLE_COD2_MP: expected = "a6aa70d4e2b0bf5f388b0653752847bddac95398ee0d860e757ec79e466f5d1b"; break;
+    default: return false;
+    }
     FILE *file = fopen(path, "rb");
     if (!file) return false;
     CC_SHA256_CTX state;
@@ -662,9 +706,12 @@ static bool tested_cod4_image(const char *path, enum lp32_title title)
     return !strcmp(actual, expected);
 }
 
-static struct lp32_code_signature cod4_depth_signature(const struct macho_image32 *image)
+/* Finds the title's unique depth-mode test in an untested executable. */
+static struct lp32_code_signature cod_depth_signature(const struct macho_image32 *image,
+                                                      const struct lp32_code_signature *tested)
 {
-    static const uint8_t pattern[] = {0xf6, 0x85, 0xbd, 0xfb, 0xff, 0xff, 0x08};
+    const uint8_t *pattern = tested->expected;
+    const size_t pattern_size = tested->length;
     struct lp32_code_signature found = {0};
     if (!image->header) return found;
     const struct load_command *command = (const void *)(image->header + 1);
@@ -677,12 +724,12 @@ static struct lp32_code_signature cod4_depth_signature(const struct macho_image3
                 if (size > image->max_address - segment->vmaddr)
                     size = image->max_address - segment->vmaddr;
                 const uint8_t *bytes = (const void *)(uintptr_t)segment->vmaddr;
-                for (uint32_t offset = 0; offset + sizeof(pattern) <= size; ++offset) {
-                    if (memcmp(bytes + offset, pattern, sizeof(pattern))) continue;
+                for (uint32_t offset = 0; offset + pattern_size <= size; ++offset) {
+                    if (memcmp(bytes + offset, pattern, pattern_size)) continue;
                     if (found.length) return (struct lp32_code_signature){0};
                     found.address = segment->vmaddr + offset;
-                    memcpy(found.expected, pattern, sizeof(pattern));
-                    found.length = sizeof(pattern);
+                    memcpy(found.expected, pattern, pattern_size);
+                    found.length = (uint8_t)pattern_size;
                 }
             }
         }
@@ -701,6 +748,8 @@ const struct lp32_game_profile *lp32_profile_named(const char *name)
     if (!name) return NULL;
     if (!strcasecmp(name, "cod") || !strcasecmp(name, "cod4")) return &cod4_profile;
     if (!strcasecmp(name, "cod4mp") || !strcasecmp(name, "cod4-mp")) return &cod4_mp_profile;
+    if (!strcasecmp(name, "cod2")) return &cod2_profile;
+    if (!strcasecmp(name, "cod2mp") || !strcasecmp(name, "cod2-mp")) return &cod2_mp_profile;
     if (!strcasecmp(name, "mw2") || !strcasecmp(name, "codmw2")) return &mw2_profile;
     if (!strcasecmp(name, "mw2mp") || !strcasecmp(name, "mw2-mp")) return &mw2_mp_profile;
     if (!strcasecmp(name, "mw3") || !strcasecmp(name, "codmw3")) return &mw3_profile;
@@ -801,9 +850,10 @@ int lp32_profile_select(const struct macho_image32 *image, const char *image_pat
             }
         }
     }
-    if (selected && image_path &&
-        (selected->title == LP32_TITLE_COD4 || selected->title == LP32_TITLE_COD4_MP) &&
-        (!tested_cod4_image(image_path, selected->title) || getenv("LP32_COD4_GENERIC")))
+    if (selected && image_path && lp32_title_is_cod_carbon(selected->title) &&
+        (!tested_cod_image(image_path, selected->title) ||
+         getenv(selected->title == LP32_TITLE_COD2 || selected->title == LP32_TITLE_COD2_MP ?
+                "LP32_COD2_GENERIC" : "LP32_COD4_GENERIC")))
         selected = NULL;
     if (!selected && image_path) {
         const char *name = strrchr(image_path, '/');
@@ -816,16 +866,30 @@ int lp32_profile_select(const struct macho_image32 *image, const char *image_pat
             /* Other Mac releases may place functions at different addresses.
                Retain title-level ABI handling, but never apply the tested
                Steam image's address-based patches to an unknown binary. */
-            cod4_detected_profile = !strcmp(name, "COD4.image") ? cod4_profile : cod4_mp_profile;
-            cod4_detected_profile.entry_eip = image->entry_eip;
-            cod4_detected_profile.image_end = image->max_address;
-            cod4_detected_profile.main_address = 0;
-            cod4_detected_profile.depth_capability_check = cod4_depth_signature(image);
-            cod4_detected_profile.server_name_compare = (struct lp32_code_signature){0};
-            cod4_detected_profile.license_log_return_address = 0;
-            cod4_detected_profile.loading_screen = NULL;
-            selected = &cod4_detected_profile;
+            cod_detected_profile = !strcmp(name, "COD4.image") ? cod4_profile : cod4_mp_profile;
+            cod_detected_profile.entry_eip = image->entry_eip;
+            cod_detected_profile.image_end = image->max_address;
+            cod_detected_profile.main_address = 0;
+            cod_detected_profile.depth_capability_check =
+                cod_depth_signature(image, &cod_detected_profile.depth_capability_check);
+            cod_detected_profile.server_name_compare = (struct lp32_code_signature){0};
+            cod_detected_profile.license_log_return_address = 0;
+            cod_detected_profile.loading_screen = NULL;
+            selected = &cod_detected_profile;
             fprintf(stderr, "compat32: using generic COD4 profile for an untested image\n");
+        }
+        if (!strcmp(name, "COD2.image") || !strcmp(name, "COD2MP.image")) {
+            /* As for COD4: keep the engine-family handling, drop every
+               address tied to the tested Steam executables. */
+            cod_detected_profile = !strcmp(name, "COD2.image") ? cod2_profile : cod2_mp_profile;
+            cod_detected_profile.entry_eip = image->entry_eip;
+            cod_detected_profile.image_end = image->max_address;
+            cod_detected_profile.main_address = 0;
+            cod_detected_profile.depth_capability_check =
+                cod_depth_signature(image, &cod_detected_profile.depth_capability_check);
+            cod_detected_profile.license_log_return_address = 0;
+            selected = &cod_detected_profile;
+            fprintf(stderr, "compat32: using generic COD2 profile for an untested image\n");
         }
     }
     if (!selected) {
@@ -835,7 +899,7 @@ int lp32_profile_select(const struct macho_image32 *image, const char *image_pat
                 image->entry_eip, image->max_address);
         return -1;
     }
-    if (selected->title == LP32_TITLE_COD4 || selected->title == LP32_TITLE_COD4_MP) {
+    if (lp32_title_is_cod_carbon(selected->title)) {
         bool has_steam = false;
         for (unsigned i = 0; i < image->import_count; ++i) {
             const char *name = image->imports[i].name;
@@ -845,9 +909,9 @@ int lp32_profile_select(const struct macho_image32 *image, const char *image_pat
             }
         }
         if (!has_steam) {
-            cod4_detected_profile = *selected;
-            cod4_detected_profile.steam_app_id = 0;
-            selected = &cod4_detected_profile;
+            cod_detected_profile = *selected;
+            cod_detected_profile.steam_app_id = 0;
+            selected = &cod_detected_profile;
         }
     }
     current_profile = selected;

@@ -27,7 +27,18 @@ enum lp32_title {
     LP32_TITLE_MW2_MP,
     LP32_TITLE_MW3,
     LP32_TITLE_MW3_MP,
+    LP32_TITLE_COD2,
+    LP32_TITLE_COD2_MP,
 };
+
+/* Aspyr's Carbon/AGL ports of COD2 and COD4 share one Mac engine layer
+   (CMacGameEngine, the Direct3D-on-OpenGL wrapper, a Carbon event loop with
+   AGL fullscreen display ports, ARB programs and the Game Guide launcher). */
+static inline int lp32_title_is_cod_carbon(enum lp32_title title)
+{
+    return title == LP32_TITLE_COD4 || title == LP32_TITLE_COD4_MP ||
+           title == LP32_TITLE_COD2 || title == LP32_TITLE_COD2_MP;
+}
 
 /* Aspyr's SDL-based ports of MW2 and MW3 share one engine family and
    runtime (Miles/Bink guest libraries, core-profile GL, SDL event pump). */
