@@ -116,10 +116,6 @@ int main(void)
     const bool translated = process_is_translated();
     printf("host: arch=x86_64 translated=%s cs64=0x%04x\n",
            translated ? "yes" : "no", cs64);
-    if (!translated) {
-        fprintf(stderr, "mode32_probe: run this x86_64 executable through Rosetta\n");
-        return EXIT_FAILURE;
-    }
 
     int ldt_index = allocate_cs32();
     uint16_t cs32 = (uint16_t)((ldt_index << 3) | 7);
@@ -170,6 +166,13 @@ int main(void)
            guest_eip, guest_esp, return_stub);
     fflush(stdout);
 
+    if (!translated) {
+        /* Native long mode permits null DS/ES, but compatibility mode
+           needs the flat user data selector already held in SS. */
+        uint16_t selector;
+        __asm__ volatile("movw %%ss, %0; movw %0, %%ds; movw %0, %%es"
+                         : "=&r"(selector) :: "memory");
+    }
     uint32_t result = run_compat32(guest_eip, guest_esp, cs32);
     printf("result: 0x%08" PRIx32 " (%s)\n", result,
            result == UINT32_C(0x12345678) ? "PASS" : "FAIL");

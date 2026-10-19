@@ -4,6 +4,7 @@ int libcpp_stream_bridge32_dispatch(const char *, const uint32_t *, uint64_t *);
 }
 #include <algorithm>
 #include <cstring>
+#include <initializer_list>
 #include <locale>
 #include <istream>
 #include <ostream>

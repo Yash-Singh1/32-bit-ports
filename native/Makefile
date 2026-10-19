@@ -209,11 +209,26 @@ endif
 CLANG := $(shell xcrun --find clang)
 SDK := $(shell xcrun --sdk macosx --show-sdk-path)
 CFLAGS := -arch x86_64 -isysroot $(SDK) -mmacosx-version-min=11.0 -O2 -g -Wall -Wextra -Werror
+CXXFLAGS := $(CFLAGS) -std=c++11
 LDFLAGS := -Wl,-no_pie,-pagezero_size,0x1000,-segaddr,__TEXT,0x100000000,-segaddr,__LEGACY,0x1000,-segprot,__LEGACY,rwx,rwx
 
 .PHONY: test-game-profile all bundle promote-loader icons clean run run-game controller-probe game-info test-controller test-arb-program-guard test-arb-sampler-usage mode-switch-stress
 
 all: $(BUILD_DIR)/mode32_probe $(BUILD_DIR)/game_loader
+
+SWIFTC := $(shell xcrun --find swiftc)
+CONVERTER_CORE := converter/Source.swift converter/Conversion.swift
+CONVERTER_SOURCES := $(CONVERTER_CORE) converter/App.swift converter/main.swift
+
+$(BUILD_DIR)/lego-converter-arm64: $(CONVERTER_SOURCES) | $(BUILD_DIR)
+	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -target arm64-apple-macosx11.0 -sdk $(SDK) $^ -o $@
+
+$(BUILD_DIR)/lego-converter-x86_64: $(CONVERTER_SOURCES) | $(BUILD_DIR)
+	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -target x86_64-apple-macosx11.0 -sdk $(SDK) $^ -o $@
+
+.PHONY: converter lego-converter
+converter lego-converter: $(BUILD_DIR)/lego-converter-arm64 $(BUILD_DIR)/lego-converter-x86_64 $(BUILD_DIR)/game_loader
+	python3 tools/package_lego_converter.py --build "$(BUILD_DIR)"
 
 # Report the title this build uses and the app it came from; handy before a
 # first build, and for identifying an app whose identifier GAME_BUNDLE_IDS does
@@ -243,8 +258,12 @@ $(BUILD_DIR)/mode32_probe: src/mode32_probe.c src/mode32_switch.S src/address_sp
 	$(CLANG) $(CFLAGS) $(LDFLAGS) $^ -o $@
 	codesign --force --sign - $@
 
-$(BUILD_DIR)/game_loader: src/game_loader.c src/hitch_recorder.c src/game_profile.c src/macho_loader.c src/compat_runtime.c src/audio_bridge.c src/audio_queue_bridge.c src/sound_manager_bridge.c src/openal_bridge.c src/hid_bridge.c src/dispatch_bridge.m src/dlfcn_bridge.c src/gl_core_bridge.c src/curl_bridge.c src/steam_bridge.c src/steam_storage_fix.c src/resource_bridge.c src/stl_bridge.c src/libcpp_bridge.c src/libcpp_stream_bridge.cpp src/tlv_bridge.c src/blocks_bridge.c src/zlib_bridge.c src/regex_bridge.c src/rtti_bridge.c src/carbon_bridge.c src/carbon_text.m src/carbon_ui.m src/cfnetwork_bridge.c src/crypto_bridge.c src/quicktime_bridge.m src/controller_bridge.m src/objc_bridge.m src/objc_legacy_bridge.m src/arb_program_guard.c src/arb_sampler_usage.c src/mode32_switch.S src/import_gateway.S src/address_space_reserve.S $(wildcard src/*.h) | $(BUILD_DIR)
-	$(CLANG) $(CFLAGS) $(LDFLAGS) $(filter %.c %.m %.cpp %.S,$^) -lc++ -lffi -lcurl -lz -framework CoreText -framework Security -framework ForceFeedback -framework OpenAL -framework CFNetwork -framework SystemConfiguration -framework AVFoundation -framework CoreMedia -framework CoreVideo -framework Cocoa -framework Carbon -framework OpenGL -framework AudioToolbox -framework AudioUnit -framework CoreAudio -framework GameController -framework IOKit -o $@
+# Keep the C++ standard out of the mixed C/Objective-C loader invocation.
+$(BUILD_DIR)/libcpp_stream_bridge.o: src/libcpp_stream_bridge.cpp src/compat_runtime.h src/macho_loader.h Makefile | $(BUILD_DIR)
+	$(CLANG) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/game_loader: src/game_loader.c src/hitch_recorder.c src/game_profile.c src/macho_loader.c src/compat_runtime.c src/audio_bridge.c src/audio_queue_bridge.c src/sound_manager_bridge.c src/openal_bridge.c src/hid_bridge.c src/dispatch_bridge.m src/dlfcn_bridge.c src/gl_core_bridge.c src/curl_bridge.c src/steam_bridge.c src/steam_storage_fix.c src/resource_bridge.c src/stl_bridge.c src/libcpp_bridge.c $(BUILD_DIR)/libcpp_stream_bridge.o src/tlv_bridge.c src/blocks_bridge.c src/zlib_bridge.c src/regex_bridge.c src/rtti_bridge.c src/carbon_bridge.c src/carbon_text.m src/carbon_ui.m src/cfnetwork_bridge.c src/crypto_bridge.c src/quicktime_bridge.m src/controller_bridge.m src/objc_bridge.m src/objc_legacy_bridge.m src/arb_program_guard.c src/arb_sampler_usage.c src/mode32_switch.S src/import_gateway.S src/address_space_reserve.S $(wildcard src/*.h) | $(BUILD_DIR)
+	$(CLANG) $(CFLAGS) $(LDFLAGS) $(filter %.c %.m %.o %.S,$^) -lc++ -lffi -lcurl -lz -framework CoreText -framework Security -framework ForceFeedback -framework OpenAL -framework CFNetwork -framework SystemConfiguration -framework AVFoundation -framework CoreMedia -framework CoreVideo -framework Cocoa -framework Carbon -framework OpenGL -framework AudioToolbox -framework AudioUnit -framework CoreAudio -framework GameController -framework IOKit -o $@
 	codesign --force --sign - $@
 
 $(BUILD_DIR)/game_loader: src/focus_policy.m
@@ -389,7 +408,7 @@ $(BUILD_DIR)/mkicon: icons/mkicon.swift | $(BUILD_DIR)
 	swiftc -O $< -o $@
 
 clean:
-	rm -f $(BUILD_DIR)/mode32_probe $(BUILD_DIR)/game_loader $(BUILD_DIR)/controller_probe $(BUILD_DIR)/mkicon
+	rm -f $(BUILD_DIR)/mode32_probe $(BUILD_DIR)/game_loader $(BUILD_DIR)/libcpp_stream_bridge.o $(BUILD_DIR)/controller_probe $(BUILD_DIR)/mkicon
 
 .PHONY: test-hitch-recorder
 $(BUILD_DIR)/test_hitch_recorder: tests/test_hitch_recorder.c src/hitch_recorder.c src/hitch_recorder.h src/host_diagnostics.h | $(BUILD_DIR)
@@ -527,8 +546,8 @@ $(BUILD_DIR)/test_zlib_bridge: tests/test_zlib_bridge.c src/zlib_bridge.c src/zl
 test-zlib-bridge: $(BUILD_DIR)/test_zlib_bridge
 	arch -x86_64 ./$(BUILD_DIR)/test_zlib_bridge
 
-$(BUILD_DIR)/test_libcpp_stream_bridge: tests/test_libcpp_stream_bridge.cpp src/libcpp_stream_bridge.cpp | $(BUILD_DIR)
-	$(CLANG) $(CFLAGS) -Wl,-pagezero_size,0x1000 tests/test_libcpp_stream_bridge.cpp -lc++ -o $@
+$(BUILD_DIR)/test_libcpp_stream_bridge: tests/test_libcpp_stream_bridge.cpp src/libcpp_stream_bridge.cpp src/compat_runtime.h src/macho_loader.h Makefile | $(BUILD_DIR)
+	$(CLANG) $(CXXFLAGS) -Wl,-pagezero_size,0x1000 tests/test_libcpp_stream_bridge.cpp -lc++ -o $@
 
 test-libcpp-stream-bridge: $(BUILD_DIR)/test_libcpp_stream_bridge
 	arch -x86_64 ./$(BUILD_DIR)/test_libcpp_stream_bridge

@@ -26,6 +26,11 @@ including Apple Silicon through Rosetta 2. You need your own copy of each game.
 
 ## Building
 
+Run `make converter` from `native/` to build `native/build/LEGO-Converter.app`.
+Drop or select an original Mac app or Steam game folder, choose the game if
+needed, then convert. Compiler tools are included. See the
+[converter notes](native/converter/README.md) for supported releases and building.
+
 Requirements:
 
 - macOS 11 or later.

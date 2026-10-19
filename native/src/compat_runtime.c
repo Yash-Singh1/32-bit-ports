@@ -948,6 +948,19 @@ static bool process_is_translated(void)
            translated == 1;
 }
 
+static bool native_intel_host;
+
+static inline void prepare_guest_data_segments(void)
+{
+    if (!native_intel_host) return;
+    /* Native macOS leaves DS/ES null in 64-bit code. They must describe
+       flat data in compatibility mode. SS already holds the host's flat
+       user data selector. Reload after host calls, which can clear DS/ES. */
+    uint16_t selector;
+    __asm__ volatile("movw %%ss, %0; movw %0, %%ds; movw %0, %%es"
+                     : "=&r"(selector) :: "memory");
+}
+
 static int allocate_cs32(void)
 {
     ldt_entry_t entry;
@@ -2848,7 +2861,10 @@ void lp32_guest_execution_enter(void)
 {
     /* The plain global is tested first: the thread-local costs a
        tlv_get_addr call, and this runs twice per import. */
-    if (guest_execution_lock_disabled || guest_execution_lock_held) return;
+    if (guest_execution_lock_disabled || guest_execution_lock_held) {
+        prepare_guest_data_segments();
+        return;
+    }
     if (compat_runtime32_frame_profile_enabled) {
         if (pthread_mutex_trylock(&guest_execution_lock) != 0) {
             uint64_t start = profile_now();
@@ -2861,6 +2877,7 @@ void lp32_guest_execution_enter(void)
         pthread_mutex_lock(&guest_execution_lock);
     }
     guest_execution_lock_held = true;
+    prepare_guest_data_segments();
 }
 
 void lp32_guest_execution_leave(void)
@@ -3015,10 +3032,7 @@ const struct macho_image32 *compat_runtime32_image(void)
 
 int compat_runtime32_initialize(struct macho_image32 *image)
 {
-    if (!process_is_translated()) {
-        errno = ENOTSUP;
-        return runtime_error("x86_64 host is not running through Rosetta");
-    }
+    native_intel_host = !process_is_translated();
     current_image = image;
     rtti_bridge32_initialize(image);
     /* Keep small titles at the original base; large BSS images need the heap
