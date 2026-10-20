@@ -766,7 +766,7 @@ static void guest_crash_diagnostic(int signal_number, siginfo_t *info,
             char *colon = strchr(item, ':');
             uint32_t address = (uint32_t)strtoul(item, NULL, 0);
             unsigned count = colon ? (unsigned)strtoul(colon + 1, NULL, 0) : 8;
-            if (address < 0x1000 || address >= 0x7f000000 || count > 64) continue;
+            if (address < 0x1000 || address >= 0xfffff000u || count > 64) continue;
             const uint32_t *words = (const void *)(uintptr_t)address;
             for (unsigned index = 0; index < count; ++index) {
                 GUEST_DIAGNOSTIC("compat32: crash mem[0x%08x]=0x%08x\n",
@@ -948,7 +948,7 @@ static void runtime_diagnostic_line(const char *line)
 static const char *default_image_path(const char *argv0, char *buffer,
                                       size_t size)
 {
-    static const char *const candidates[] = {"LEGOPirates", "LEGOCloneWars", "LEGOMarvel", "LEGOCompleteSaga", "COD4", "COD4MP", "COD2", "COD2MP", "MW2", "MW2MP", "MW3", "MW3MP"};
+    static const char *const candidates[] = {"LEGOPirates", "LEGOCloneWars", "LEGOMarvel", "LEGOCompleteSaga", "COD4", "COD4MP", "COD2", "COD2MP", "MW2", "MW2MP", "MW3", "MW3MP", "Gangstar"};
     const char *slash = strrchr(argv0, '/');
     size_t directory_length = slash ? (size_t)(slash - argv0) : 0;
     for (size_t index = 0; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {
@@ -1109,6 +1109,12 @@ int main(int argc, char **argv)
             ++bound;
         }
         if (bink_imports) fprintf(stderr, "compat32: bound %u Bink imports to the original i386 library\n", bound);
+    }
+    if (lp32_profile()->title == LP32_TITLE_GANGSTAR) {
+        /* GCC 4.2 libstdc++ ABI (COW strings, iostreams, RTTI): bind every
+           mangled import to Apple's private i386 runtime, as for COD4. */
+        if (guest_dyld32_initialize(image_path) || guest_dyld32_bind_main_cxx(&image))
+            return EXIT_FAILURE;
     }
     if (lp32_title_is_mw_sdl(lp32_profile()->title)) {
         if (guest_dyld32_initialize(image_path)) return EXIT_FAILURE;

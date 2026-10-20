@@ -23,6 +23,12 @@
 #include "regex_bridge.h"
 #include "iconv_bridge.h"
 #include "zlib_bridge.h"
+#include "sdl_bridge.h"
+#include <CommonCrypto/CommonDigest.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <sys/utsname.h>
+#include <wchar.h>
 #include "socket_bridge.h"
 #include "dlfcn_bridge.h"
 #include "guest_dyld.h"
@@ -1587,7 +1593,8 @@ static int build_transition_bridge(void)
 static uint32_t guest_context_symbol(const char *name)
 {
     if (!lp32_title_is_cod_carbon(lp32_profile()->title) &&
-        !lp32_title_is_mw_sdl(lp32_profile()->title)) return 0;
+        !lp32_title_is_mw_sdl(lp32_profile()->title) &&
+        lp32_profile()->title != LP32_TITLE_GANGSTAR) return 0;
     const uint8_t *entry = NULL;
     if (!strcmp(name, "_setjmp")) entry = lp32_context_setjmp;
     else if (!strcmp(name, "__setjmp")) entry = lp32_context_fast_setjmp;
@@ -4402,6 +4409,56 @@ static bool guest_arena_free_end(uint64_t address, uint64_t *end)
     return found;
 }
 
+/* getifaddrs with the i386 struct ifaddrs (32-bit pointers).  The whole list
+   (records, names, socket addresses and AF_LINK if_data, whose layout is the
+   same in both ABIs) lives in one guest block that freeifaddrs releases. */
+static uint32_t guest_getifaddrs(uint32_t output)
+{
+    struct ifaddrs *list = NULL;
+    if (!output) return (uint32_t)-1;
+    if (getifaddrs(&list)) return (uint32_t)-1;
+    size_t size = 0;
+    for (struct ifaddrs *i = list; i; i = i->ifa_next) {
+        size += 28 + ((strlen(i->ifa_name) + 4) & ~(size_t)3);
+        struct sockaddr *addresses[] = {i->ifa_addr, i->ifa_netmask, i->ifa_dstaddr};
+        for (unsigned j = 0; j < 3; ++j)
+            if (addresses[j]) size += (addresses[j]->sa_len + 3u) & ~3u;
+        if (i->ifa_data && i->ifa_addr && i->ifa_addr->sa_family == AF_LINK) size += sizeof(struct if_data);
+    }
+    uint32_t block = guest_allocate(size ? size : 4, true);
+    if (!block) { freeifaddrs(list); errno = ENOMEM; return (uint32_t)-1; }
+    uint32_t cursor = block, previous = 0, first = 0;
+    for (struct ifaddrs *i = list; i; i = i->ifa_next) {
+        uint32_t record = cursor;
+        uint32_t *fields = (void *)(uintptr_t)record;
+        cursor += 28;
+        size_t name_length = strlen(i->ifa_name);
+        memcpy((void *)(uintptr_t)cursor, i->ifa_name, name_length + 1);
+        fields[1] = cursor;
+        cursor += (uint32_t)((name_length + 4) & ~(size_t)3);
+        fields[2] = i->ifa_flags;
+        struct sockaddr *addresses[] = {i->ifa_addr, i->ifa_netmask, i->ifa_dstaddr};
+        for (unsigned j = 0; j < 3; ++j) {
+            if (!addresses[j]) continue;
+            memcpy((void *)(uintptr_t)cursor, addresses[j], addresses[j]->sa_len);
+            fields[3 + j] = cursor;
+            cursor += (addresses[j]->sa_len + 3u) & ~3u;
+        }
+        if (i->ifa_data && i->ifa_addr && i->ifa_addr->sa_family == AF_LINK) {
+            memcpy((void *)(uintptr_t)cursor, i->ifa_data, sizeof(struct if_data));
+            fields[6] = cursor;
+            cursor += sizeof(struct if_data);
+        }
+        if (previous) ((uint32_t *)(uintptr_t)previous)[0] = record;
+        else first = record;
+        previous = record;
+    }
+    freeifaddrs(list);
+    *(uint32_t *)(uintptr_t)output = first ? first : 0;
+    if (!first) guest_deallocate(block);
+    return 0;
+}
+
 static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
                                            const uint32_t *arguments,
                                            uint32_t return_address);
@@ -4558,6 +4615,7 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
     if (socket_bridge32_dispatch(name, arguments, &socket_result)) return socket_result;
     uint64_t zlib_result;
     if (zlib_bridge32_dispatch(name, arguments, &zlib_result)) return zlib_result;
+    if (sdl_bridge32_dispatch(name, arguments, &zlib_result)) return zlib_result;
     uint64_t dylib_result;
     if (guest_dyld32_dispatch(name, arguments, &dylib_result)) return dylib_result;
     if (dlfcn_bridge32_dispatch(name,arguments,&dylib_result)) return dylib_result;
@@ -4841,6 +4899,17 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
     }
     if (import_is(name, "_realloc")) {
         return guest_reallocate(arguments[0], arguments[1], return_address);
+    }
+    if (import_is(name, "_malloc_size")) {
+        /* Usable size of a live guest block (its capacity); 0 for any
+           pointer the guest heap did not hand out, as on macOS. */
+        pthread_mutex_lock(&guest_heap_lock);
+        uint32_t *metadata = NULL;
+        bool already_free = false;
+        uint32_t size = arguments[0] && guest_heap_validate_header_locked(arguments[0], &metadata, &already_free) ?
+            metadata[2] : 0;
+        pthread_mutex_unlock(&guest_heap_lock);
+        return size;
     }
     if (import_is(name, "_free") || import_is(name, "__ZdlPv") ||
         import_is(name, "__ZdaPv")) {
@@ -6377,6 +6446,67 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
         (const wchar_t *)(uintptr_t)arguments[0],(const wchar_t *)(uintptr_t)arguments[1]);
     if (import_is(name, "_wmemcmp")) return (uint32_t)wmemcmp(
         (const wchar_t *)(uintptr_t)arguments[0],(const wchar_t *)(uintptr_t)arguments[1],arguments[2]);
+    /* wchar_t is 32 bits for both ABIs, so the memory forms pass through. */
+    if (import_is(name, "_wmemcpy")) return (uint32_t)(uintptr_t)wmemcpy(
+        (wchar_t *)(uintptr_t)arguments[0],(const wchar_t *)(uintptr_t)arguments[1],arguments[2]);
+    if (import_is(name, "_wmemmove")) return (uint32_t)(uintptr_t)wmemmove(
+        (wchar_t *)(uintptr_t)arguments[0],(const wchar_t *)(uintptr_t)arguments[1],arguments[2]);
+    if (import_is(name, "_wmemset")) return (uint32_t)(uintptr_t)wmemset(
+        (wchar_t *)(uintptr_t)arguments[0],(wchar_t)arguments[1],arguments[2]);
+    if (import_is(name, "_wmemchr")) return (uint32_t)(uintptr_t)wmemchr(
+        (const wchar_t *)(uintptr_t)arguments[0],(wchar_t)arguments[1],arguments[2]);
+    /* clock_t and long are 32 bits in the guest; CLOCKS_PER_SEC matches. */
+    if (import_is(name, "_clock")) return (uint32_t)clock();
+    if (import_is(name, "_lrint") || import_is(name, "_lround")) {
+        double value = guest_double(arguments);
+        return (uint32_t)(int32_t)(import_is(name, "_lrint") ? lrint(value) : lround(value));
+    }
+    if (import_is(name, "_lrintf")) { float value; memcpy(&value, arguments, 4); return (uint32_t)(int32_t)lrintf(value); }
+    if (import_is(name, "_putchar")) return (uint32_t)putchar((int)arguments[0]);
+    if (import_is(name, "_vprintf")) {
+        char *text = malloc(65536);
+        const char *format = (const void *)(uintptr_t)arguments[0];
+        const uint32_t *values = (const void *)(uintptr_t)arguments[1];
+        int formatted = text && format && values ? guest_vformat(text, 65536, format, values) : -1;
+        if (formatted >= 0) fputs(text, stdout);
+        free(text);
+        return (uint32_t)formatted;
+    }
+    /* struct utsname is five 256-byte strings in both ABIs. */
+    if (import_is(name, "_uname")) return (uint32_t)uname((struct utsname *)(uintptr_t)arguments[0]);
+    if (import_is(name, "_sysconf")) {
+        long value = sysconf((int)arguments[0]);
+        return (uint32_t)(value > INT32_MAX ? INT32_MAX : (int32_t)value);
+    }
+    if (import_is(name, "_pthread_key_delete")) {
+        /* Guest keys are never reused (see _pthread_key_create). */
+        return arguments[0] < 128 ? 0 : (uint32_t)EINVAL;
+    }
+    if (import_is(name, "_getifaddrs")) return guest_getifaddrs(arguments[0]);
+    if (import_is(name, "_freeifaddrs")) { guest_deallocate(arguments[0]); return 0; }
+    if (import_is(name, "_CC_MD5") || import_is(name, "_SHA1") || import_is(name, "_CC_SHA1")) {
+        const void *data = (const void *)(uintptr_t)arguments[0];
+        unsigned char *digest = (void *)(uintptr_t)arguments[2];
+        static unsigned char shared_digest[CC_SHA1_DIGEST_LENGTH];
+        unsigned char *out = digest ? digest : shared_digest; /* OpenSSL's NULL form */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        if (import_is(name, "_CC_MD5")) CC_MD5(data, arguments[1], out);
+        else CC_SHA1(data, arguments[1], out);
+#pragma clang diagnostic pop
+        return digest ? arguments[2] : 0;
+    }
+    if (import_is(name, "___cxa_pure_virtual") || import_is(name, "_abort") ||
+        import_is(name, "___assert_rtn")) {
+        if (import_is(name, "___assert_rtn"))
+            fprintf(stderr, "compat32: guest assertion failed: %s, function %s, file %s, line %d\n",
+                    (const char *)(uintptr_t)arguments[3], (const char *)(uintptr_t)arguments[0],
+                    (const char *)(uintptr_t)arguments[1], (int)arguments[2]);
+        else
+            fprintf(stderr, "compat32: guest %s from 0x%08" PRIx32 "\n", name + 1, return_address);
+        fflush(NULL);
+        abort();
+    }
     if (import_is(name, "_wcscmp")) return (uint32_t)wcscmp(
         (const wchar_t *)(uintptr_t)arguments[0],(const wchar_t *)(uintptr_t)arguments[1]);
     if (import_is(name, "_wcsncmp")) return (uint32_t)wcsncmp(
@@ -6418,17 +6548,19 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
         return 0;
     }
 
+    /* Matching dictionaries and registry properties follow the Create rule;
+       IOServiceGetMatchingService(s) consumes the guest's reference. */
     if (import_is(name, "_IOBSDNameMatching")) {
         const char *bsd_name = (const char *)(uintptr_t)arguments[2];
         if (getenv("LP32_TRACE_FILES")) fprintf(stderr, "compat32: IOBSDNameMatching %s\n", bsd_name);
         CFMutableDictionaryRef dict = IOBSDNameMatching(arguments[0], arguments[1], bsd_name);
-        uint32_t token = objc_bridge32_guest_object(dict); if (dict) CFRelease(dict); return token;
+        uint32_t token = objc_bridge32_guest_owned_object(dict); if (dict) CFRelease(dict); return token;
     }
     if (import_is(name, "_IOServiceNameMatching") || import_is(name, "_IOServiceMatching")) {
         const char *match = (const char *)(uintptr_t)arguments[0];
         CFMutableDictionaryRef dict = import_is(name, "_IOServiceNameMatching") ?
             IOServiceNameMatching(match) : IOServiceMatching(match);
-        uint32_t token = objc_bridge32_guest_object(dict);
+        uint32_t token = objc_bridge32_guest_owned_object(dict);
         if (dict) CFRelease(dict);
         return token;
     }
@@ -6436,8 +6568,13 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
         CFDictionaryRef dict = objc_bridge32_host_object(arguments[1]);
         if (!dict) return import_is(name, "_IOServiceGetMatchingService") ? 0 : (uint32_t)kIOReturnBadArgument;
         CFRetain(dict); /* Matching consumes its argument. */
-        if (import_is(name, "_IOServiceGetMatchingService")) return IOServiceGetMatchingService(arguments[0], dict);
-        return IOServiceGetMatchingServices(arguments[0], dict, (io_iterator_t *)(uintptr_t)arguments[2]);
+        uint32_t status = import_is(name, "_IOServiceGetMatchingService") ?
+            IOServiceGetMatchingService(arguments[0], dict) :
+            IOServiceGetMatchingServices(arguments[0], dict, (io_iterator_t *)(uintptr_t)arguments[2]);
+        uint64_t ignored;
+        uint32_t token = arguments[1];
+        objc_bridge32_dispatch("_CFRelease", &token, &ignored);
+        return status;
     }
     if (import_is(name, "_IOIteratorNext")) return IOIteratorNext(arguments[0]);
     if (import_is(name, "_IORegistryEntryFromPath"))
@@ -6456,12 +6593,12 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
     if (import_is(name, "_IORegistryEntryCreateIterator")) return IORegistryEntryCreateIterator(arguments[0], (const char *)(uintptr_t)arguments[1], arguments[2], (io_iterator_t *)(uintptr_t)arguments[3]);
     if (import_is(name, "_IORegistryEntryCreateCFProperty")) {
         CFTypeRef value = IORegistryEntryCreateCFProperty(arguments[0], objc_bridge32_host_object(arguments[1]), NULL, arguments[3]);
-        uint32_t token = objc_bridge32_guest_object((void *)value); if (value) CFRelease(value); return token;
+        uint32_t token = objc_bridge32_guest_owned_object((void *)value); if (value) CFRelease(value); return token;
     }
     if (import_is(name, "_IORegistryEntryCreateCFProperties") && arguments[0]) {
         CFMutableDictionaryRef dict = NULL;
         kern_return_t r = IORegistryEntryCreateCFProperties(arguments[0], &dict, NULL, arguments[3]);
-        if (arguments[1]) *(uint32_t *)(uintptr_t)arguments[1] = objc_bridge32_guest_object(dict);
+        if (arguments[1]) *(uint32_t *)(uintptr_t)arguments[1] = objc_bridge32_guest_owned_object(dict);
         if (dict) CFRelease(dict); return r;
     }
     if (import_is(name, "_IONotificationPortCreate") ||

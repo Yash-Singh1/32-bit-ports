@@ -608,3 +608,115 @@ int macho_image32_bind_external_relocations(const struct macho_image32 *image,
     fprintf(stderr, "compat32: bound %u main-image external relocations\n", dysymtab->nextrel);
     return 0;
 }
+
+static uint64_t read_uleb(const uint8_t **p, const uint8_t *end, bool *bad)
+{
+    uint64_t value = 0;
+    unsigned shift = 0;
+    while (*p < end) {
+        uint8_t byte = *(*p)++;
+        if (shift < 64) value |= (uint64_t)(byte & 0x7f) << shift;
+        shift += 7;
+        if (!(byte & 0x80)) return value;
+    }
+    *bad = true;
+    return 0;
+}
+
+static int64_t read_sleb(const uint8_t **p, const uint8_t *end, bool *bad)
+{
+    int64_t value = 0;
+    unsigned shift = 0;
+    uint8_t byte = 0;
+    while (*p < end) {
+        byte = *(*p)++;
+        if (shift < 64) value |= (int64_t)(byte & 0x7f) << shift;
+        shift += 7;
+        if (!(byte & 0x80)) {
+            if (shift < 64 && (byte & 0x40)) value |= -((int64_t)1 << shift);
+            return value;
+        }
+    }
+    *bad = true;
+    return 0;
+}
+
+int macho_image32_bind_compressed(const struct macho_image32 *image,
+    uint32_t (*resolve)(const char *, void *), int (*wanted)(const char *), void *context)
+{
+    const struct dyld_info_command *info = NULL;
+    const struct segment_command *segments[16];
+    const struct segment_command *linkedit = NULL;
+    unsigned segment_count = 0;
+    const uint8_t *cursor = (const void *)(image->header + 1);
+    for (uint32_t i = 0; i < image->header->ncmds; ++i) {
+        const struct load_command *cmd = (const void *)cursor;
+        if (cmd->cmd == LC_DYLD_INFO || cmd->cmd == LC_DYLD_INFO_ONLY) info = (const void *)cmd;
+        if (cmd->cmd == LC_SEGMENT) {
+            const struct segment_command *segment = (const void *)cmd;
+            if (segment_count < 16) segments[segment_count++] = segment;
+            if (!strncmp(segment->segname, SEG_LINKEDIT, 16)) linkedit = segment;
+        }
+        cursor += cmd->cmdsize;
+    }
+    if (!info || !info->bind_size) return 0;
+    if (!linkedit || info->bind_off < linkedit->fileoff ||
+        !range_inside(info->bind_off - linkedit->fileoff, info->bind_size, linkedit->filesize))
+        return fail_message("main-image bind stream outside LINKEDIT");
+    const uint8_t *p = (const void *)(uintptr_t)(linkedit->vmaddr + (info->bind_off - linkedit->fileoff));
+    const uint8_t *end = p + info->bind_size;
+    bool bad = false;
+    int segment = -1;
+    unsigned type = BIND_TYPE_POINTER, bound = 0;
+    uint64_t offset = 0;
+    int64_t addend = 0;
+    const char *name = NULL;
+    while (p < end && !bad) {
+        unsigned byte = *p++, op = byte & BIND_OPCODE_MASK, imm = byte & BIND_IMMEDIATE_MASK;
+        uint64_t count = 0, skip = 0;
+        switch (op) {
+            case BIND_OPCODE_DONE: p = end; break;
+            case BIND_OPCODE_SET_DYLIB_ORDINAL_IMM: case BIND_OPCODE_SET_DYLIB_SPECIAL_IMM: break;
+            case BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB: read_uleb(&p, end, &bad); break;
+            case BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM: {
+                name = (const char *)p;
+                const uint8_t *nul = memchr(p, 0, (size_t)(end - p));
+                if (!nul) return fail_message("unterminated main-image bind symbol");
+                p = nul + 1; break;
+            }
+            case BIND_OPCODE_SET_TYPE_IMM: type = imm; break;
+            case BIND_OPCODE_SET_ADDEND_SLEB: addend = read_sleb(&p, end, &bad); break;
+            case BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB: segment = (int)imm; offset = read_uleb(&p, end, &bad); break;
+            case BIND_OPCODE_ADD_ADDR_ULEB: offset += read_uleb(&p, end, &bad); break;
+            case BIND_OPCODE_DO_BIND: count = 1; break;
+            case BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB: count = 1; skip = read_uleb(&p, end, &bad); break;
+            case BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED: count = 1; skip = imm * 4; break;
+            case BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB:
+                count = read_uleb(&p, end, &bad); skip = read_uleb(&p, end, &bad); break;
+            default: return fail_message("unsupported main-image bind opcode");
+        }
+        if (bad || count > info->bind_size * 8) return fail_message("invalid main-image bind stream");
+        for (uint64_t i = 0; i < count; ++i) {
+            if (segment < 0 || (unsigned)segment >= segment_count || !name ||
+                offset + 4 > segments[segment]->vmsize || type != BIND_TYPE_POINTER)
+                return fail_message("invalid main-image bind target");
+            uint32_t address = segments[segment]->vmaddr + (uint32_t)offset;
+            offset += 4 + skip;
+            if (!wanted(name)) continue;
+            /* Slots the indirect symbol table already describes are bound
+               through the import list. */
+            bool listed = false;
+            for (uint32_t j = 0; j < image->import_count && !listed; ++j)
+                listed = image->imports[j].address == address;
+            if (listed) continue;
+            uint32_t target = resolve(name, context);
+            if (!target) { fprintf(stderr, "game_loader: cannot bind %s\n", name); return -1; }
+            struct macho_import32 slot = {.address = address, .kind = MACHO_IMPORT32_POINTER};
+            if (macho_image32_bind_import(&slot, target + (uint32_t)addend)) return -1;
+            ++bound;
+        }
+    }
+    if (bad) return fail_message("truncated main-image bind stream");
+    fprintf(stderr, "compat32: bound %u main-image data references\n", bound);
+    return 0;
+}

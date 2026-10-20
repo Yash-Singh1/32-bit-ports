@@ -52,5 +52,9 @@ uint32_t macho_image32_find_symbol(const struct macho_image32 *image, const char
 int macho_image32_bind_import(const struct macho_import32 *import, uint32_t target);
 int macho_image32_bind_external_relocations(const struct macho_image32 *image,
     uint32_t (*resolve)(const char *, void *), void *context);
+/* Binds the LC_DYLD_INFO bind stream's data references (vtables, typeinfo)
+   whose symbol `wanted` accepts, skipping slots already in the import list. */
+int macho_image32_bind_compressed(const struct macho_image32 *image,
+    uint32_t (*resolve)(const char *, void *), int (*wanted)(const char *), void *context);
 
 #endif

@@ -29,6 +29,7 @@ enum lp32_title {
     LP32_TITLE_MW3_MP,
     LP32_TITLE_COD2,
     LP32_TITLE_COD2_MP,
+    LP32_TITLE_GANGSTAR,
 };
 
 /* Aspyr's Carbon/AGL ports of COD2 and COD4 share one Mac engine layer

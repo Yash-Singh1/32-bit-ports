@@ -1,5 +1,6 @@
 #include "objc_legacy_bridge.h"
 #include "objc_bridge.h"
+#include "qtkit_bridge.h"
 #include "focus_policy.h"
 #include "compat_runtime.h"
 #include "game_profile.h"
@@ -201,6 +202,21 @@ static void legacy_dealloc(id self, SEL command) {
     pthread_mutex_unlock(&instance_mutex);
     if (token) compat_runtime32_deallocate(token);
 }
+/* Guest +initialize (Gangstar's GameDelegate registers its defaults there).
+ * The runtime sends it on the class's first message, which happens after the
+ * image's initializers; inherited calls on subclasses are not repeated. */
+static void legacy_initialize(id self, SEL command) {
+    (void)command;
+    struct class_entry *entry=entry_for_native((Class)self);
+    if(!entry || entry->native!=(Class)self)return;
+    struct method32 *m=method_in_list(((struct class32 *)(uintptr_t)entry->guest->isa)->methods,"initialize");
+    if(!m)return;
+    uint32_t args[]={(uint32_t)(uintptr_t)entry->guest,m->name};
+    compat_runtime32_call(m->imp,args,2);
+}
+static bool runs_guest_initialize(void){
+    return lp32_profile()->title==LP32_TITLE_GANGSTAR;
+}
 static void add_methods(Class native,struct class_entry *c,bool meta){
     struct class32 *g=meta?(void *)(uintptr_t)c->guest->isa:c->guest;if(!g->methods)return;
     uint32_t *list=(void *)(uintptr_t)g->methods;struct method32 *m=(void *)(list+2);
@@ -208,6 +224,10 @@ static void add_methods(Class native,struct class_entry *c,bool meta){
         const char *name=str(m[i].name),*types=str(m[i].types);
         /* Class initialization must not re-enter guest code before its imports
          * and C++ globals have been initialized. These images have no +load. */
+        if(meta&&!strcmp(name,"initialize")&&runs_guest_initialize()){
+            class_addMethod(native,@selector(initialize),(IMP)legacy_initialize,"v@:");
+            continue;
+        }
         if(!strcmp(name,"load")||!strcmp(name,"initialize")||!strcmp(name,"dealloc")||*types=='{')continue;
         Method inherited=class_getInstanceMethod(class_getSuperclass(native),sel_registerName(name));
         const char *encoding=inherited?method_getTypeEncoding(inherited):types;
@@ -234,7 +254,12 @@ static void add_methods(Class native,struct class_entry *c,bool meta){
 void *objc_legacy32_class(const char *name){
     scan();Class existing=objc_getClass(name);if(existing)return existing;
     struct class_entry *c=NULL;for(unsigned i=0;i<class_count;++i)if(!strcmp(str(classes[i].guest->name),name)){c=&classes[i];break;}
-    if(!c)return NULL;
+    if(!c){
+        /* Host stand-ins for Cider's runtime classes, registered under
+           private names (objc_bridge.m) so an image can define its own. */
+        if(!strcmp(name,"GameWindow"))return objc_getClass("LP32CiderGameWindow");
+        return qtkit_bridge32_class(name);
+    }
     Class parent=objc_legacy32_class(str(c->guest->super));if(!parent)return NULL;
     if (lp32_gl_backend_is_replacement() && parent == [NSOpenGLContext class]) {
         Class replacement = objc_getClass(lp32_gl_backend_context_class());

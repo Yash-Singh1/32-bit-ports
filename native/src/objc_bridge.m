@@ -8,6 +8,8 @@
 #include "hid_bridge.h"
 #include "dispatch_bridge.h"
 #include "objc_legacy_bridge.h"
+#include "qtkit_bridge.h"
+#import <SystemConfiguration/SystemConfiguration.h>
 #include "carbon_bridge.h"
 #include "cfnetwork_bridge.h"
 #include "hitch_recorder.h"
@@ -993,6 +995,9 @@ uint32_t objc_bridge32_guest_pointer(void *pointer)
     return token;
 }
 uint32_t objc_bridge32_guest_object(void *object) { return proxy_for_object((id)object); }
+/* A Create/Copy-rule result: the guest owns one reference (CFRelease or
+   -release/-autorelease drop it). */
+uint32_t objc_bridge32_guest_owned_object(void *object) { return object ? proxy_for_owned_object((id)object) : 0; }
 
 /* objc_exception_match: exception is a guest object token, cls a class token. */
 uint32_t objc_bridge32_guest_is_kind_of_class(uint32_t exception, uint32_t cls)
@@ -1530,6 +1535,38 @@ static bool mw2_profile_active(void)
     return lp32_title_is_mw_sdl(title);
 }
 
+/* Gangstar's EAGLView is a plain NSView that attaches its own context in
+   -lockFocus, which layer-backed AppKit never calls.  Attach the context to
+   the view that returns it from -openGLContext when the game first makes it
+   current or presents it (again after a window rebuild detached it). */
+static void attach_owning_view(NSOpenGLContext *context)
+{
+    if (context.view || ![NSThread isMainThread]) return;
+    static NSUInteger attempts;
+    if (attempts++ % 30) return;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    for (NSWindow *window in [NSApp windows]) {
+        NSMutableArray<NSView *> *pending = [NSMutableArray array];
+        if (window.contentView) [pending addObject:window.contentView];
+        while (pending.count) {
+            NSView *view = pending.lastObject;
+            [pending removeLastObject];
+            [pending addObjectsFromArray:view.subviews];
+            if ([view isKindOfClass:[NSOpenGLView class]] ||
+                ![view respondsToSelector:@selector(openGLContext)] ||
+                [(id)view openGLContext] != context) continue;
+            [context setView:view];
+            [context update];
+            attempts = 0;
+            fprintf(stderr, "compat32: attached GL context to %s (%.0fx%.0f)\n",
+                    class_getName(object_getClass(view)), view.bounds.size.width, view.bounds.size.height);
+            return;
+        }
+    }
+#pragma clang diagnostic pop
+}
+
 static void mw2_request_gl_reattach(void)
 {
     if (!mw2_profile_active()) return;
@@ -1624,6 +1661,11 @@ static bool invoke_simple_message(id receiver, const char *selector_name,
 
     size_t word = 2;
     bool explicit_long_long = strstr(selector_name, "LongLong") != NULL;
+    /* Object out-parameters (NSError **): the host writes a 64-bit id into
+       a host slot; the guest's 32-bit slot gets its proxy afterwards. */
+    id object_outputs[4] = {nil};
+    uint32_t *object_output_slots[4] = {NULL};
+    unsigned object_output_count = 0;
     for (NSUInteger index = 2; index < [signature numberOfArguments]; ++index) {
         const char *type = skip_type_qualifiers([signature getArgumentTypeAtIndex:index]);
         switch (*type) {
@@ -1657,6 +1699,19 @@ static bool invoke_simple_message(id receiver, const char *selector_name,
             }
             case '^': {
                 uint32_t token=guest_arguments[word];
+                if (type[1] == '@' && token >= 0x1000 && object_output_count < 4) {
+                    /* Gangstar passes an object as its own error: slot; on
+                       i386 the error landed in that object's isa word and
+                       went unused.  Never let AppKit write into a host
+                       object: the error is dropped instead. */
+                    bool handle = object_for_argument(token) != nil;
+                    unsigned slot = object_output_count++;
+                    object_output_slots[slot] = handle ? NULL : (uint32_t *)(uintptr_t)token;
+                    object_outputs[slot] = nil;
+                    void *value = &object_outputs[slot];
+                    [invocation setArgument:&value atIndex:index];
+                    break;
+                }
                 id object=object_for_argument(token);
                 void *value=object ? ([object isKindOfClass:[NSValue class]] ?
                     [(NSValue *)object pointerValue] : (void *)object) : (void *)(uintptr_t)token;
@@ -1712,6 +1767,10 @@ static bool invoke_simple_message(id receiver, const char *selector_name,
                 selector_name, [[exception reason] UTF8String]);
         return false;
     }
+    /* Out-parameter objects are autoreleased (+0) by convention. */
+    for (unsigned i = 0; i < object_output_count; ++i)
+        if (object_output_slots[i])
+            *object_output_slots[i] = object_outputs[i] ? proxy_for_autoreleased_object(object_outputs[i]) : 0;
 
     const char *return_type = skip_type_qualifiers([signature methodReturnType]);
     switch (*return_type) {
@@ -4354,6 +4413,11 @@ static NSOpenGLPixelFormat *legacy_pixel_format(void)
 - (BOOL)acceptsFirstMouse:(NSEvent *)event { (void)event; return YES; }
 @end
 
+/* TransGaming Cider's window controller, which Pirates imports by name.  The
+   runtime name keeps "GameWindow" free for titles that define their own
+   (Gangstar's NSWindow subclass); objc_legacy32_class falls back to this
+   class only when the image does not. */
+__attribute__((objc_runtime_name("LP32CiderGameWindow")))
 @interface GameWindow : NSObject
 {
     NSWindow *_fullScreenWindow;
@@ -8390,7 +8454,9 @@ static int objc_bridge32_dispatch_body(const char *import_name,
                                        const uint32_t *arguments,
                                        uint64_t *result)
 {
-    if (lp32_title_is_cod_carbon(lp32_profile()->title) &&
+    /* Gangstar hides its pointer with the same CG calls and asks
+       CGCursorIsVisible before toggling it. */
+    if ((lp32_title_is_cod_carbon(lp32_profile()->title) || lp32_profile()->title == LP32_TITLE_GANGSTAR) &&
         (!strcmp(import_name, "_HideCursor") || !strcmp(import_name, "_ShowCursor") ||
          !strcmp(import_name, "_InitCursor") || !strcmp(import_name, "_CGCursorIsVisible") ||
          !strcmp(import_name, "_CGDisplayHideCursor") || !strcmp(import_name, "_CGDisplayShowCursor"))) {
@@ -8446,6 +8512,56 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         id object = object_for_argument(arguments[0]);
         *result = (uint32_t)(LP32_NAME_IS(import_name, import_length, "_objc_sync_enter") ?
                             objc_sync_enter(object) : objc_sync_exit(object));
+        return 1;
+    }
+    /* Gangstar creates a display link for its GL view but never starts it
+       (CVDisplayLinkStart is not imported), so the callback is only kept. */
+    if (LP32_NAME_IS(import_name, import_length, "_CVDisplayLinkCreateWithActiveCGDisplays")) {
+        uint32_t handle = compat_runtime32_allocate(3 * sizeof(uint32_t), 1);
+        if (!handle) { *result = kCVReturnAllocationFailed; return 1; }
+        ((uint32_t *)(uintptr_t)handle)[0] = CGMainDisplayID();
+        if (arguments[0]) *(uint32_t *)(uintptr_t)arguments[0] = handle;
+        *result = kCVReturnSuccess;
+        return 1;
+    }
+    if (LP32_NAME_IS(import_name, import_length, "_CVDisplayLinkSetOutputCallback")) {
+        if (!arguments[0]) { *result = kCVReturnInvalidArgument; return 1; }
+        ((uint32_t *)(uintptr_t)arguments[0])[1] = arguments[1];
+        ((uint32_t *)(uintptr_t)arguments[0])[2] = arguments[2];
+        *result = kCVReturnSuccess;
+        return 1;
+    }
+    if (LP32_NAME_IS(import_name, import_length, "_CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext")) {
+        *result = arguments[0] ? kCVReturnSuccess : kCVReturnInvalidArgument;
+        return 1;
+    }
+    if (LP32_NAME_IS(import_name, import_length, "_CGGetLastMouseDelta")) {
+        int32_t dx = 0, dy = 0;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        if (!background_test_mode() && !lp32_suppress_background_input()) CGGetLastMouseDelta(&dx, &dy);
+#pragma clang diagnostic pop
+        if (arguments[0]) *(int32_t *)(uintptr_t)arguments[0] = dx;
+        if (arguments[1]) *(int32_t *)(uintptr_t)arguments[1] = dy;
+        *result = 0;
+        return 1;
+    }
+    /* Reachability references are CF objects; socket addresses share the
+       i386 layout and flags are a 32-bit mask. */
+    if (LP32_NAME_IS(import_name, import_length, "_SCNetworkReachabilityCreateWithName") ||
+        LP32_NAME_IS(import_name, import_length, "_SCNetworkReachabilityCreateWithAddress")) {
+        SCNetworkReachabilityRef target = strstr(import_name, "WithName") ?
+            SCNetworkReachabilityCreateWithName(NULL, (const char *)(uintptr_t)arguments[1]) :
+            SCNetworkReachabilityCreateWithAddress(NULL, (const struct sockaddr *)(uintptr_t)arguments[1]);
+        *result = target ? proxy_for_object((id)target) : 0;
+        if (target) CFRelease(target);
+        return 1;
+    }
+    if (LP32_NAME_IS(import_name, import_length, "_SCNetworkReachabilityGetFlags")) {
+        SCNetworkReachabilityRef target = (SCNetworkReachabilityRef)object_for_argument(arguments[0]);
+        SCNetworkReachabilityFlags flags = 0;
+        *result = target && SCNetworkReachabilityGetFlags(target, &flags);
+        if (arguments[1]) *(uint32_t *)(uintptr_t)arguments[1] = flags;
         return 1;
     }
     /* MW3 only asks a display link for the refresh period. The guest handle
@@ -9024,6 +9140,32 @@ static int objc_bridge32_dispatch_body(const char *import_name,
             fprintf(stderr, "compat32: _CGDisplaySwitchToMode %.0fx%.0f (emulated)\n",
                     requested.width, requested.height);
         }
+        *result = kCGErrorSuccess;
+        return 1;
+    }
+    /* Gangstar switches modes through a display configuration transaction.
+       The game's window covers the display at its native mode, so every
+       step succeeds and the native mode stays in effect (queries keep
+       reporting it, so the game sizes itself to the real display). */
+    if (LP32_NAME_IS(import_name, import_length, "_CGBeginDisplayConfiguration")) {
+        uint32_t *config = (void *)(uintptr_t)arguments[0];
+        if (config) *config = 1;
+        *result = kCGErrorSuccess;
+        return 1;
+    }
+    if (LP32_NAME_IS(import_name, import_length, "_CGConfigureDisplayWithDisplayMode")) {
+        NSDictionary *mode = object_for_argument(arguments[2]);
+        if (getenv("LP32_TRACE_DISPLAY")) {
+            fprintf(stderr, "compat32: display %u configuration requests %ux%u (kept native)\n",
+                    arguments[1], [[mode objectForKey:@"Width"] unsignedIntValue],
+                    [[mode objectForKey:@"Height"] unsignedIntValue]);
+        }
+        *result = kCGErrorSuccess;
+        return 1;
+    }
+    if (LP32_NAME_IS(import_name, import_length, "_CGConfigureDisplayFadeEffect") ||
+        LP32_NAME_IS(import_name, import_length, "_CGCompleteDisplayConfiguration") ||
+        LP32_NAME_IS(import_name, import_length, "_CGCancelDisplayConfiguration")) {
         *result = kCGErrorSuccess;
         return 1;
     }
@@ -11576,7 +11718,10 @@ static int objc_bridge32_dispatch_body(const char *import_name,
     }
     if (LP32_NAME_IS(import_name, import_length, "_NSLog")) {
         NSString *format = object_for_argument(arguments[0]);
-        fprintf(stderr, "compat32: NSLog: %s\n", [[format description] UTF8String]);
+        CFStringRef formatted = [format isKindOfClass:[NSString class]] ?
+            format_cf_string32((CFStringRef)format, arguments + 1) : NULL;
+        fprintf(stderr, "compat32: NSLog: %s\n", [[(formatted ? (id)formatted : format) description] UTF8String]);
+        if (formatted) CFRelease(formatted);
         *result = 0;
         return 1;
     }
@@ -11629,6 +11774,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         if (trace_selectors < 0) {
             trace_selectors = getenv("LP32_TRACE_OBJC_SELECTORS") != NULL;
         }
+        if (receiver && selector_name && qtkit_bridge32_message(receiver, selector_name, arguments, result)) return 1;
         if (trace_selectors && selector_name) {
             fprintf(stderr, "compat32: objc swap=%llu %s receiver=%s\n",
                     (unsigned long long)objc_bridge_swap_count, selector_name,
@@ -11709,9 +11855,14 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         if (receiver == [NSOpenGLContext class] ||
             [receiver isKindOfClass:[NSOpenGLContext class]])
             texture_bind_cache_invalidate();
-        /* MW2 presents with a plain -[NSOpenGLContext flushBuffer], not the
-           Feral view's swapBuffers, so count and capture frames here. */
-        if (lp32_title_is_mw_sdl(lp32_profile()->title) &&
+        if (lp32_profile()->title == LP32_TITLE_GANGSTAR &&
+            (!strcmp(selector_name, "makeCurrentContext") || !strcmp(selector_name, "flushBuffer")) &&
+            [receiver isKindOfClass:[NSOpenGLContext class]])
+            attach_owning_view((NSOpenGLContext *)receiver);
+        /* MW2 and Gangstar present with a plain -[NSOpenGLContext
+           flushBuffer], not the Feral view's swapBuffers, so count and
+           capture frames here. */
+        if ((lp32_title_is_mw_sdl(lp32_profile()->title) || lp32_profile()->title == LP32_TITLE_GANGSTAR) &&
             !strcmp(selector_name, "flushBuffer") &&
             [receiver isKindOfClass:[NSOpenGLContext class]]) {
             if (mw2_gl_reattach_left > 0) {
@@ -11917,6 +12068,20 @@ static int objc_bridge32_dispatch_body(const char *import_name,
             *result = proxy_for_string_result(receiver,arguments[0],selector_name,value,string_init);
             CFRelease(formatted); return 1;
         }
+        /* The other variadic NSString formatters (Gangstar builds its IGP
+           cache path with stringByAppendingFormat:). */
+        if ((!strcmp(selector_name, "stringByAppendingFormat:") || !strcmp(selector_name, "appendFormat:")) &&
+            [receiver isKindOfClass:[NSString class]]) {
+            CFStringRef formatted = format_cf_string32((CFStringRef)object_for_argument(arguments[2]), arguments + 3);
+            if (!formatted) return 0;
+            if (!strcmp(selector_name, "appendFormat:")) {
+                [(NSMutableString *)receiver appendString:(NSString *)formatted];
+                *result = 0;
+            } else {
+                *result = proxy_for_autoreleased_object([(NSString *)receiver stringByAppendingString:(NSString *)formatted]);
+            }
+            CFRelease(formatted); return 1;
+        }
         if (strcmp(selector_name, "CGLContextObj") == 0) {
             CGLContextObj context = [(NSOpenGLContext *)receiver CGLContextObj];
             *result = objc_bridge32_guest_pointer(context);
@@ -11978,6 +12143,36 @@ static int objc_bridge32_dispatch_body(const char *import_name,
                 *result = 0;
                 return 1;
             }
+        }
+        /* NSTrackingRectTag is an NSInteger that AppKit fills with a 64-bit
+           value; hand the guest a small token instead of a truncated tag. */
+        static NSTrackingRectTag tracking_tags[256];
+        if (strcmp(selector_name, "addTrackingRect:owner:userData:assumeInside:") == 0 &&
+            [receiver isKindOfClass:[NSView class]]) {
+            const float *rect = (const void *)(arguments + 2);
+            NSTrackingRectTag tag = [(NSView *)receiver
+                addTrackingRect:NSMakeRect(rect[0], rect[1], rect[2], rect[3])
+                          owner:object_for_argument(arguments[6])
+                       userData:(void *)(uintptr_t)arguments[7]
+                   assumeInside:arguments[8] != 0];
+            *result = 0;
+            pthread_mutex_lock(&proxy_mutex);
+            for (uint32_t i = 0; i < 256 && !*result; ++i)
+                if (!tracking_tags[i]) { tracking_tags[i] = tag; *result = i + 1; }
+            pthread_mutex_unlock(&proxy_mutex);
+            if (!*result) [(NSView *)receiver removeTrackingRect:tag];
+            return 1;
+        }
+        if (strcmp(selector_name, "removeTrackingRect:") == 0 &&
+            [receiver isKindOfClass:[NSView class]]) {
+            uint32_t token = arguments[2];
+            NSTrackingRectTag tag = 0;
+            pthread_mutex_lock(&proxy_mutex);
+            if (token >= 1 && token <= 256) { tag = tracking_tags[token - 1]; tracking_tags[token - 1] = 0; }
+            pthread_mutex_unlock(&proxy_mutex);
+            if (tag) [(NSView *)receiver removeTrackingRect:tag];
+            *result = 0;
+            return 1;
         }
         if (strcmp(selector_name,
                    "initWithContentRect:styleMask:backing:defer:") == 0) {
@@ -12169,6 +12364,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
             return 1;
         }
         if (!destination || !receiver || !selector_name) return 0;
+        if (qtkit_bridge32_stret(receiver, selector_name, destination)) { *result = 0; return 1; }
 
         NSRect rect;
         if (strcmp(selector_name, "frame") == 0 ||
@@ -12293,10 +12489,15 @@ uint32_t objc_bridge32_pointer_import(const char *import_name)
         {"_NSDeviceRGBColorSpace", &NSDeviceRGBColorSpace},
         {"_NSStringPboardType", &NSStringPboardType},
         {"_kCFBundleNameKey", (NSString *const *)&kCFBundleNameKey},
+        {"_kCFBundleVersionKey", (NSString *const *)&kCFBundleVersionKey},
+        {"_NSWorkspaceDidWakeNotification", &NSWorkspaceDidWakeNotification},
+        {"_NSWorkspaceWillSleepNotification", &NSWorkspaceWillSleepNotification},
     };
 #pragma clang diagnostic pop
     for (size_t i = 0; i < sizeof(constants) / sizeof(constants[0]); ++i)
         if (!strcmp(import_name, constants[i].name)) return proxy_for_object(*constants[i].value);
+    if (LP32_NAME_IS(import_name, import_length, "_QTMovieDidEndNotification"))
+        return proxy_for_object(@(kQTMovieDidEndNotificationName));
     return 0;
 }
 

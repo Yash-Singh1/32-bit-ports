@@ -656,6 +656,21 @@ static const struct lp32_game_profile mw3_mp_profile = {
     .code_patches = mw3_mp_code_patches,
 };
 
+/* Gameloft's Gangstar: Miami Vindication (Mac App Store, 2011): a Cocoa app
+   that renders fixed-function GL through its own NSOpenGLContext and takes
+   input and the GL attributes through SDL 1.3's 1.2-compatible calls
+   (sdl_bridge.m implements those natively instead of the bundled framework).
+   llvm-gcc i386: the callee pops the hidden struct-return pointer. */
+static const struct lp32_game_profile gangstar_profile = {
+    .title = LP32_TITLE_GANGSTAR,
+    .name = "Gangstar",
+    .display_name = "Gangstar: Miami Vindication",
+    .log_directory = "GangstarCompat",
+    .image_file = "Gangstar.image",
+    .callee_pops_struct_return = 1,
+    .thread_argument_is_direct = 1,
+};
+
 static const struct lp32_game_profile *const known_profiles[] = {
     &pirates_profile,
     &clone_wars_profile,
@@ -671,6 +686,7 @@ static const struct lp32_game_profile *const known_profiles[] = {
     &mw2_mp_profile,
     &mw3_profile,
     &mw3_mp_profile,
+    &gangstar_profile,
 };
 
 static const struct lp32_game_profile *current_profile = &unknown_profile;
@@ -798,6 +814,15 @@ uint32_t lp32_profile_main_address(const struct macho_image32 *image)
         uint32_t main = call_target(image, image->entry_eip + offset);
         if (main) return main;
     }
+    /* The 10.6 SDK's crt1 (Gangstar) also calls main from start, with the
+       shorter `mov %eax,(%esp)` encoding: e8 main; 89 04 24; e8 exit; hlt. */
+    for (uint32_t offset = 0; offset + 14 <= entry_bytes; ++offset) {
+        if (stub[offset] != 0xe8 || stub[offset + 5] != 0x89 ||
+            stub[offset + 6] != 0x04 || stub[offset + 7] != 0x24 ||
+            stub[offset + 8] != 0xe8 || stub[offset + 13] != 0xf4) continue;
+        uint32_t main = call_target(image, image->entry_eip + offset);
+        if (main) return main;
+    }
     /*
      * crt1's `start` stub ends with `call __start; hlt`.  The C-level
      * `__start` asks dyld for its initializer/terminator hooks through the
@@ -862,6 +887,7 @@ int lp32_profile_select(const struct macho_image32 *image, const char *image_pat
         if (!strcmp(name, "MW2MP.image")) selected = &mw2_mp_profile;
         if (!strcmp(name, "MW3.image")) selected = &mw3_profile;
         if (!strcmp(name, "MW3MP.image")) selected = &mw3_mp_profile;
+        if (!strcmp(name, "Gangstar.image")) selected = &gangstar_profile;
         if (!strcmp(name, "COD4.image") || !strcmp(name, "COD4MP.image")) {
             /* Other Mac releases may place functions at different addresses.
                Retain title-level ABI handling, but never apply the tested

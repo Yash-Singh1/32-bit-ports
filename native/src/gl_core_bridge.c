@@ -861,6 +861,7 @@ static const struct { const char *name; unsigned count; } mw2_integer_calls[] = 
     {"glFlushVertexArrayRangeAPPLE",2},{"glGenVertexArraysAPPLE",2},
     {"glPointParameterfvARB",2},{"glTexEnvi",3},
     {"glVertexArrayParameteriAPPLE",2},{"glVertexArrayRangeAPPLE",2},
+    {"glColor4ub",4},{"glPointParameterfv",2},
 };
 enum { kMw2IntegerCallCount = sizeof(mw2_integer_calls)/sizeof(mw2_integer_calls[0]) };
 static integer_gl_fn mw2_integer_symbols[kMw2IntegerCallCount];
@@ -879,14 +880,14 @@ MW2_INTEGER_CALL(12) MW2_INTEGER_CALL(13) MW2_INTEGER_CALL(14) MW2_INTEGER_CALL(
 MW2_INTEGER_CALL(16) MW2_INTEGER_CALL(17) MW2_INTEGER_CALL(18) MW2_INTEGER_CALL(19)
 MW2_INTEGER_CALL(20) MW2_INTEGER_CALL(21) MW2_INTEGER_CALL(22) MW2_INTEGER_CALL(23)
 MW2_INTEGER_CALL(24) MW2_INTEGER_CALL(25) MW2_INTEGER_CALL(26) MW2_INTEGER_CALL(27)
-MW2_INTEGER_CALL(28) MW2_INTEGER_CALL(29)
+MW2_INTEGER_CALL(28) MW2_INTEGER_CALL(29) MW2_INTEGER_CALL(30) MW2_INTEGER_CALL(31)
 static const lp32_fast_import_fn mw2_integer_handlers[kMw2IntegerCallCount] = {
     mw2_integer_0,mw2_integer_1,mw2_integer_2,mw2_integer_3,mw2_integer_4,mw2_integer_5,
     mw2_integer_6,mw2_integer_7,mw2_integer_8,mw2_integer_9,mw2_integer_10,mw2_integer_11,
     mw2_integer_12,mw2_integer_13,mw2_integer_14,mw2_integer_15,mw2_integer_16,
     mw2_integer_17,mw2_integer_18,mw2_integer_19,mw2_integer_20,mw2_integer_21,
     mw2_integer_22,mw2_integer_23,mw2_integer_24,mw2_integer_25,mw2_integer_26,
-    mw2_integer_27,mw2_integer_28,mw2_integer_29,
+    mw2_integer_27,mw2_integer_28,mw2_integer_29,mw2_integer_30,mw2_integer_31,
 };
 _Static_assert(sizeof(mw2_integer_handlers)/sizeof(mw2_integer_handlers[0])==kMw2IntegerCallCount,
                "one handler per MW2 integer call");
@@ -930,6 +931,34 @@ static uint64_t extra_glVertex2f(const uint32_t *a,uint32_t site){
 }
 /* GLU defines gluOrtho2D as glOrtho with near -1 and far 1; issuing it
    here keeps it on the selected GL backend. */
+/* Gangstar's fixed-function entry points with float/double arguments. */
+extern void glLightModelf(uint32_t,float);
+extern void glLineWidth(float);
+extern void glMultiTexCoord4f(uint32_t,float,float,float,float);
+extern void glNormal3f(float,float,float);
+extern void glPointParameterf(uint32_t,float);
+extern void glSampleCoverage(float,uint8_t);
+static uint64_t extra_glLightModelf(const uint32_t *a,uint32_t site){
+    (void)site;glLightModelf(a[0],f32(a[1]));return 0;
+}
+static uint64_t extra_glLineWidth(const uint32_t *a,uint32_t site){
+    (void)site;glLineWidth(f32(a[0]));return 0;
+}
+static uint64_t extra_glMultiTexCoord4f(const uint32_t *a,uint32_t site){
+    (void)site;glMultiTexCoord4f(a[0],f32(a[1]),f32(a[2]),f32(a[3]),f32(a[4]));return 0;
+}
+static uint64_t extra_glNormal3f(const uint32_t *a,uint32_t site){
+    (void)site;glNormal3f(f32(a[0]),f32(a[1]),f32(a[2]));return 0;
+}
+static uint64_t extra_glOrtho(const uint32_t *a,uint32_t site){
+    (void)site;glOrtho(f64(a),f64(a+2),f64(a+4),f64(a+6),f64(a+8),f64(a+10));return 0;
+}
+static uint64_t extra_glPointParameterf(const uint32_t *a,uint32_t site){
+    (void)site;glPointParameterf(a[0],f32(a[1]));return 0;
+}
+static uint64_t extra_glSampleCoverage(const uint32_t *a,uint32_t site){
+    (void)site;glSampleCoverage(f32(a[0]),(uint8_t)a[1]);return 0;
+}
 static uint64_t extra_gluOrtho2D(const uint32_t *a,uint32_t site){
     (void)site;glOrtho(f64(a),f64(a+2),f64(a+4),f64(a+6),-1.0,1.0);return 0;
 }
@@ -994,6 +1023,13 @@ lp32_fast_import_fn gl_core_bridge32_fast_import(const char *name){
     if(!strcmp(name,"glTexCoord2f"))return extra_glTexCoord2f;
     if(!strcmp(name,"glVertex2f"))return extra_glVertex2f;
     if(!strcmp(name,"gluOrtho2D"))return extra_gluOrtho2D;
+    if(!strcmp(name,"glLightModelf"))return extra_glLightModelf;
+    if(!strcmp(name,"glLineWidth"))return extra_glLineWidth;
+    if(!strcmp(name,"glMultiTexCoord4f"))return extra_glMultiTexCoord4f;
+    if(!strcmp(name,"glNormal3f"))return extra_glNormal3f;
+    if(!strcmp(name,"glOrtho"))return extra_glOrtho;
+    if(!strcmp(name,"glPointParameterf"))return extra_glPointParameterf;
+    if(!strcmp(name,"glSampleCoverage"))return extra_glSampleCoverage;
     if(!strcmp(name,"glTransformFeedbackVaryingsEXT"))return extra_glTransformFeedbackVaryingsEXT;
     if(!strcmp(name,"glFenceSync"))return extra_glFenceSync;
     if(!strcmp(name,"glDeleteSync"))return extra_glDeleteSync;

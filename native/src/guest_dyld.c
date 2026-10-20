@@ -793,6 +793,11 @@ static uint32_t main_runtime_symbol(const char *name, void *context)
     return compat_runtime32_resolve_symbol(name, true);
 }
 
+static int cxx_symbol(const char *name)
+{
+    return !strncmp(name, "__Z", 3);
+}
+
 int guest_dyld32_bind_main_cxx(const struct macho_image32 *image)
 {
     char path[PATH_MAX];
@@ -812,6 +817,9 @@ int guest_dyld32_bind_main_cxx(const struct macho_image32 *image)
            must execute in the same i386 ABI as the mangled C++ methods. */
         if (strncmp(import->name, "__Z", 3) && strcmp(import->name, "___dynamic_cast")) continue;
         uint32_t target = guest_dyld32_symbol(runtime, import->name + 1);
+        /* A weak C++ definition of the image's own (Gangstar's inline
+           appleRootCA()) binds through dyld too; keep the image's copy. */
+        if (!target && import->target) { error_pending = false; target = import->target; }
         if (!target || macho_image32_bind_import(import, target)) {
             fprintf(stderr, "compat32: unable to bind C++ import %s\n", import->name);
             return -1;
@@ -819,7 +827,10 @@ int guest_dyld32_bind_main_cxx(const struct macho_image32 *image)
         ++bound;
     }
     fprintf(stderr, "compat32: bound %u main-image C++ imports to i386 runtime\n", bound);
-    return macho_image32_bind_external_relocations(image, main_runtime_symbol, (void *)(uintptr_t)runtime);
+    if (macho_image32_bind_external_relocations(image, main_runtime_symbol, (void *)(uintptr_t)runtime)) return -1;
+    /* Images linked with LC_DYLD_INFO (Gangstar) bind vtable and typeinfo
+       slots that reference the runtime through the bind stream instead. */
+    return macho_image32_bind_compressed(image, main_runtime_symbol, cxx_symbol, (void *)(uintptr_t)runtime);
 }
 
 int guest_dyld32_close(uint32_t handle)

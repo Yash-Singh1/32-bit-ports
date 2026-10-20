@@ -1701,7 +1701,10 @@ int audio_bridge32_dispatch(const char *import_name, const uint32_t *arguments,
         }
         return handled;
     }
-    if (LP32_NAME_IS(import_name, import_length, "_FindNextComponent")) {
+    /* The AudioComponent API (Gangstar) takes the same guest handles as the
+       Component Manager calls it replaced. */
+    if (LP32_NAME_IS(import_name, import_length, "_FindNextComponent") ||
+        LP32_NAME_IS(import_name, import_length, "_AudioComponentFindNext")) {
         pthread_mutex_lock(&audio_object_lock);
         uint32_t index = arguments[0] - kGuestComponentHandleBase;
         AudioComponent previous = arguments[0] && index < component_count ? component_objects[index] : NULL;
@@ -1720,6 +1723,7 @@ int audio_bridge32_dispatch(const char *import_name, const uint32_t *arguments,
         return 1;
     }
     if (LP32_NAME_IS(import_name, import_length, "_OpenAComponent") ||
+        LP32_NAME_IS(import_name, import_length, "_AudioComponentInstanceNew") ||
         LP32_NAME_IS(import_name, import_length, "_OpenComponent")) {
         uint32_t index = arguments[0] - kGuestComponentHandleBase;
         AudioUnit unit = NULL;
@@ -1734,6 +1738,7 @@ int audio_bridge32_dispatch(const char *import_name, const uint32_t *arguments,
         return 1;
     }
     if (LP32_NAME_IS(import_name, import_length, "_GetComponentVersion") ||
+        LP32_NAME_IS(import_name, import_length, "_AudioComponentInstanceDispose") ||
         LP32_NAME_IS(import_name, import_length, "_CloseComponent")) {
         AudioUnit unit = synchronized_unit_for_guest(arguments[0]);
         if (!unit) return 0; /* Other bridges own graphics/movie components. */
