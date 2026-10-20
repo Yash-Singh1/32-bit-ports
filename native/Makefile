@@ -4,7 +4,7 @@ CONTINUE_WHEN_INACTIVE ?= 0
 
 # One loader serves every supported title; the bundle targets pick the title
 # with GAME=pirates (default), clonewars, marvel, saga, cod2, cod2mp, cod4, cod4mp,
-# mw2, mw2mp, mw3 or mw3mp.
+# mw2, mw2mp, mw3, mw3mp or gangstar.
 GAME ?= pirates
 ifneq ($(filter $(GAME),cod cod2 cod2mp cod4 cod4mp),)
 # Aspyr's Carbon-era ports share tools/bundle_cod4.py.
@@ -29,6 +29,18 @@ IMAGE_NAME := $(MW2_STEM).image
 LOADER_NAME := $(MW2_STEM)Compat
 CG_SOURCE :=
 ICON_NAME := AppIcon.icns
+else ifeq ($(GAME),gangstar)
+# Gameloft's Gangstar: Miami Vindication. SOURCE_APP may be GangstarMV.app,
+# its folder or the release's .dmg (mounted read-only while copying).
+SOURCE_APP ?=
+BUNDLE := $(BUILD_DIR)/Gangstar-Compat.app
+IMAGE_NAME := Gangstar.image
+LOADER_NAME := GangstarCompat
+CG_SOURCE :=
+ICON_NAME := icon.icns
+GUEST_RUNTIME_DIR ?= $(BUILD_DIR)/guest-runtime
+# GANGSTAR_GL=apple builds an app on Apple's OpenGL instead of GLMetal.
+GANGSTAR_GL ?= metal
 else ifeq ($(GAME),clonewars)
 BUNDLE := $(BUILD_DIR)/LEGOCloneWars-Compat.app
 SOURCE_APP := /Volumes/Storage/games/mac/lsw3/LEGOCloneWars.app
@@ -116,7 +128,7 @@ GAME_DATA := GAME.DAT GAME0.DAT GAME1.DAT GAME2.DAT GAME3.DAT GAME4.DAT
 ICON := icons/LEGOPirates.icns
 ICON_NAME := icon.icns
 else
-$(error Unknown GAME "$(GAME)"; choose pirates, clonewars, marvel, saga, cod2, cod2mp, cod4, cod4mp, mw2, mw2mp, mw3 or mw3mp)
+$(error Unknown GAME "$(GAME)"; choose pirates, clonewars, marvel, saga, cod2, cod2mp, cod4, cod4mp, mw2, mw2mp, mw3, mw3mp or gangstar)
 endif
 CG_SOURCE ?= $(SOURCE_CONTENTS)/Library/Frameworks/Cg.framework
 # Python for the Pirates unpacker.  By default a venv under $(BUILD_DIR) with
@@ -153,7 +165,7 @@ $(BUILD_DIR)/cod4-converter-x86_64: $(COD4_CONVERTER_SOURCES) | $(BUILD_DIR)
 # Always ask GLMetal's own dependency graph to refresh its driver/helper pair.
 GLMETAL_SOURCE ?= glmetal
 GLMETAL_BUILD ?= $(GLMETAL_SOURCE)/build
-.PHONY: glmetal-lib cod-converters cod2-converter cod4-converter mw2-converter mw3-converter test-cod4-converter
+.PHONY: glmetal-lib cod-converters cod2-converter cod4-converter mw2-converter mw3-converter test-cod4-converter gangstar-converter
 glmetal-lib:
 	@if test "$(GLMETAL_SOURCE)" = glmetal && ! test -f glmetal/Makefile; then \
 		git -C .. submodule update --init --recursive -- native/glmetal; \
@@ -164,6 +176,19 @@ cod-converters: cod2-converter cod4-converter mw2-converter mw3-converter
 cod4-converter mw2-converter mw3-converter: glmetal-lib
 cod2-converter cod4-converter mw2-converter mw3-converter: $(BUILD_DIR)/cod4-converter-arm64 $(BUILD_DIR)/cod4-converter-x86_64 $(BUILD_DIR)/game_loader cod4-converter/Info.plist
 	python3 tools/package_converter.py --game "$(@:-converter=)" --build "$(BUILD_DIR)" --glmetal "$(GLMETAL_BUILD)"
+
+# Gangstar's converter reuses the COD converter's runtime download, GLMetal
+# validation and copy helpers (COD4_CONVERTER_CORE).
+GANGSTAR_CONVERTER_SOURCES := $(COD4_CONVERTER_CORE) gangstar-converter/Gangstar.swift gangstar-converter/App.swift gangstar-converter/main.swift
+
+$(BUILD_DIR)/gangstar-converter-arm64: $(GANGSTAR_CONVERTER_SOURCES) | $(BUILD_DIR)
+	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -target arm64-apple-macosx11.0 -sdk $(SDK) $^ -o $@
+
+$(BUILD_DIR)/gangstar-converter-x86_64: $(GANGSTAR_CONVERTER_SOURCES) | $(BUILD_DIR)
+	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -target x86_64-apple-macosx11.0 -sdk $(SDK) $^ -o $@
+
+gangstar-converter: glmetal-lib $(BUILD_DIR)/gangstar-converter-arm64 $(BUILD_DIR)/gangstar-converter-x86_64 $(BUILD_DIR)/game_loader gangstar-converter/Info.plist tools/package_gangstar_converter.py
+	python3 tools/package_gangstar_converter.py --build "$(BUILD_DIR)" --glmetal "$(GLMETAL_BUILD)"
 
 $(BUILD_DIR)/test_cod4_converter: $(COD4_CONVERTER_CORE) tests/test_cod4_converter.swift | $(BUILD_DIR)
 	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -target $(shell uname -m)-apple-macosx11.0 -sdk $(SDK) $^ -o $@
@@ -294,6 +319,11 @@ bundle: $(BUILD_DIR)/game_loader glmetal-lib tools/bundle_cod4.py tools/prepare_
 else ifneq ($(filter $(GAME),mw2 mw2mp mw3 mw3mp),)
 bundle: $(BUILD_DIR)/game_loader glmetal-lib tools/bundle_mw2.py tools/bundle_cod4.py tools/package_glmetal.py
 	python3 tools/bundle_mw2.py --game "$(MW2_GAME)" --source-app "$(SOURCE_APP)" --mode "$(MW2_MODE)" --loader "$(BUILD_DIR)/game_loader" --bundle "$(BUNDLE)" --continue-when-inactive "$(CONTINUE_WHEN_INACTIVE)" --glmetal "$(GLMETAL_BUILD)"
+else ifeq ($(GAME),gangstar)
+bundle: $(BUILD_DIR)/game_loader glmetal-lib tools/bundle_gangstar.py tools/package_glmetal.py
+	test -n "$(SOURCE_APP)" || { echo "pass SOURCE_APP=/path/to/GangstarMV.app (or its .dmg)" >&2; exit 1; }
+	test -f "$(GUEST_RUNTIME_DIR)/libstdc++.6.dylib" || $(MAKE) cod4-runtime
+	python3 tools/bundle_gangstar.py --source "$(SOURCE_APP)" --loader "$(BUILD_DIR)/game_loader" --bundle "$(BUNDLE)" --runtime "$(GUEST_RUNTIME_DIR)" --glmetal "$(GLMETAL_BUILD)" $(if $(filter apple,$(GANGSTAR_GL)),--apple-gl,)
 else ifeq ($(GAME):$(SAGA_EDITION),saga:steam)
 bundle: $(BUILD_DIR)/game_loader $(INFO_PLIST) tools/bundle_saga_steam.py
 	python3 tools/bundle_saga_steam.py "$(SOURCE_APP)" "$(SAGA_DATA_SOURCE)" "$(BUILD_DIR)/game_loader" "$(BUNDLE)" "$(INFO_PLIST)"

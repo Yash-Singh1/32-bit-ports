@@ -1539,13 +1539,16 @@ static bool mw2_profile_active(void)
    -lockFocus, which layer-backed AppKit never calls.  Attach the context to
    the view that returns it from -openGLContext when the game first makes it
    current or presents it (again after a window rebuild detached it). */
+static void install_window_test_input(NSWindow *window);
+static void simulate_test_window_activation(NSWindow *window);
+static bool background_test_mode(void);
 static void attach_owning_view(NSOpenGLContext *context)
 {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     if (context.view || ![NSThread isMainThread]) return;
     static NSUInteger attempts;
     if (attempts++ % 30) return;
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     for (NSWindow *window in [NSApp windows]) {
         NSMutableArray<NSView *> *pending = [NSMutableArray array];
         if (window.contentView) [pending addObject:window.contentView];
@@ -1558,6 +1561,8 @@ static void attach_owning_view(NSOpenGLContext *context)
                 [(id)view openGLContext] != context) continue;
             [context setView:view];
             [context update];
+            if (background_test_mode()) simulate_test_window_activation(view.window);
+            install_window_test_input(view.window);
             attempts = 0;
             fprintf(stderr, "compat32: attached GL context to %s (%.0fx%.0f)\n",
                     class_getName(object_getClass(view)), view.bounds.size.width, view.bounds.size.height);
@@ -2069,6 +2074,9 @@ static int test_key_fifo_fd = -2;
 static char test_key_fifo_buffer[256];
 static size_t test_key_fifo_length;
 
+static NSPoint test_click_point;
+static bool test_click_point_valid;
+
 static int read_test_key_fifo(double *hold_seconds, unsigned long *modifiers)
 {
     if (test_key_fifo_fd == -2) {
@@ -2102,7 +2110,16 @@ static int read_test_key_fifo(double *hold_seconds, unsigned long *modifiers)
     char *hold_end = end;
     double hold = end ? strtod(end, &hold_end) : 0.0;
     /* Optional third field: NSEventModifierFlags (Command is 1048576). */
-    unsigned long flags = hold_end ? strtoul(hold_end, NULL, 0) : 0;
+    char *flags_end = hold_end;
+    unsigned long flags = hold_end ? strtoul(hold_end, &flags_end, 0) : 0;
+    /* Optional fourth and fifth fields for clicks (1000-1002): the point in
+       window coordinates (origin bottom left); the window centre otherwise. */
+    char *x_end = flags_end;
+    double x = flags_end ? strtod(flags_end, &x_end) : 0, y = 0;
+    char *y_end = x_end;
+    if (x_end != flags_end) y = strtod(x_end, &y_end);
+    test_click_point_valid = x_end != flags_end && y_end != x_end;
+    if (test_click_point_valid) test_click_point = NSMakePoint(x, y);
     size_t consumed = (size_t)(newline + 1 - test_key_fifo_buffer);
     memmove(test_key_fifo_buffer, newline + 1,
             test_key_fifo_length - consumed);
@@ -2187,8 +2204,17 @@ static void post_test_key_event_with_modifiers(NSWindow *window,
         NSEventType type = button == 0 ? (is_down ? NSEventTypeLeftMouseDown : NSEventTypeLeftMouseUp) :
                            button == 1 ? (is_down ? NSEventTypeRightMouseDown : NSEventTypeRightMouseUp) :
                            (is_down ? NSEventTypeOtherMouseDown : NSEventTypeOtherMouseUp);
+        NSPoint where = test_click_point_valid ? test_click_point :
+            NSMakePoint(NSMidX(window.contentView.bounds), NSMidY(window.contentView.bounds));
+        /* Games that draw their own cursor (Gangstar) track it from moves. */
+        if (is_down) {
+            NSEvent *move = [NSEvent mouseEventWithType:NSEventTypeMouseMoved location:where
+                modifierFlags:0 timestamp:[[NSProcessInfo processInfo] systemUptime]
+                windowNumber:window.windowNumber context:nil eventNumber:0 clickCount:0 pressure:0];
+            if (move) [NSApp postEvent:move atStart:NO];
+        }
         NSEvent *click = [NSEvent mouseEventWithType:type
-            location:NSMakePoint(NSMidX(window.contentView.bounds), NSMidY(window.contentView.bounds))
+            location:where
             modifierFlags:modifiers timestamp:[[NSProcessInfo processInfo] systemUptime]
             windowNumber:window.windowNumber context:nil eventNumber:0 clickCount:1
             pressure:is_down ? 1 : 0];
@@ -2206,7 +2232,9 @@ static void post_test_key_event_with_modifiers(NSWindow *window,
     if (key_code >= 123 && key_code <= 126)
         modifiers |= NSEventModifierFlagFunction | NSEventModifierFlagNumericPad;
     NSTimeInterval timestamp = [[NSProcessInfo processInfo] systemUptime];
-    bool sdl = lp32_title_is_mw_sdl(lp32_profile()->title);
+    /* Gangstar reads keys as SDL events from its SDL_PumpEvents (sdl_bridge),
+       which drains the application queue like MW2's SDL. */
+    bool sdl = lp32_title_is_mw_sdl(lp32_profile()->title) || lp32_profile()->title == LP32_TITLE_GANGSTAR;
     /* A real keyboard reports Command going down before the key and up after
        it. Send the same flags-changed events so scripted shortcuts see it. */
     if (sdl && (modifiers & NSEventModifierFlagCommand) && is_down)

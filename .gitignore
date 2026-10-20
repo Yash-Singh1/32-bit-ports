@@ -7,6 +7,7 @@
 /.research-tools/
 # Build output, including the assembled game bundles (they contain the games)
 native/build/
+native/build-*/
 # Mesa checkout and builds for LP32GL (native/lp32gl/tools/build_mesa.sh)
 native/third_party*/
 # GLMetal build output and its compiler dependencies (native/glmetal/tools/build_deps.sh)

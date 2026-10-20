@@ -51,7 +51,8 @@ static void note_call(const char *name, const uint32_t *arguments)
     if (first && seen_count < 64) seen[seen_count++] = name;
     pthread_mutex_unlock(&sdl_lock);
     if (first || trace_enabled())
-        fprintf(stderr, "compat32: sdl %s(0x%x, 0x%x, 0x%x)\n", name, arguments[0], arguments[1], arguments[2]);
+        fprintf(stderr, "compat32: sdl %s(0x%x, 0x%x, 0x%x, 0x%x, 0x%x)\n", name, arguments[0], arguments[1], arguments[2],
+                arguments[3], arguments[4]);
 }
 
 static NSArray<GCController *> *pads(void)
@@ -190,6 +191,173 @@ static uint32_t guest_string(const char *text)
     return result;
 }
 
+/* SDL 1.3's event queue (SDL_events.h): 56-byte SDL_Event records. */
+enum {
+    kSDLEventSize = 56,
+    kSDLKeyDown = 0x300, kSDLKeyUp = 0x301, kSDLTextInput = 0x303,
+    kSDLAddEvent = 0, kSDLPeekEvent = 1, kSDLGetEvent = 2,
+    kEventCapacity = 256,
+};
+struct sdl_event { uint8_t bytes[kSDLEventSize]; };
+static struct sdl_event event_queue[kEventCapacity];
+static unsigned event_head, event_count;
+static bool unicode_enabled;
+
+static uint32_t event_type(const struct sdl_event *event)
+{
+    uint32_t type;
+    memcpy(&type, event->bytes, 4);
+    return type;
+}
+
+static void queue_event(const struct sdl_event *event)
+{
+    pthread_mutex_lock(&sdl_lock);
+    if (event_count == kEventCapacity) {          /* SDL drops when full */
+        pthread_mutex_unlock(&sdl_lock);
+        return;
+    }
+    event_queue[(event_head + event_count++) % kEventCapacity] = *event;
+    pthread_mutex_unlock(&sdl_lock);
+}
+
+/* SDL_PeepEvents over the queue, in SDL's order and filtering. */
+static int peep_events(uint8_t *events, int count, uint32_t action, uint32_t min_type, uint32_t max_type)
+{
+    if (action == kSDLAddEvent) {
+        for (int i = 0; i < count; ++i) queue_event((const struct sdl_event *)(events + i * kSDLEventSize));
+        return count > 0 ? count : 0;
+    }
+    int used = 0;
+    pthread_mutex_lock(&sdl_lock);
+    for (unsigned i = 0; i < event_count && used < count;) {
+        struct sdl_event *event = &event_queue[(event_head + i) % kEventCapacity];
+        uint32_t type = event_type(event);
+        if (type < min_type || type > max_type) { ++i; continue; }
+        if (events) memcpy(events + used * kSDLEventSize, event->bytes, kSDLEventSize);
+        ++used;
+        if (action != kSDLGetEvent) { ++i; continue; }
+        /* Remove this record, keeping the rest in order. */
+        for (unsigned j = i; j + 1 < event_count; ++j)
+            event_queue[(event_head + j) % kEventCapacity] = event_queue[(event_head + j + 1) % kEventCapacity];
+        --event_count;
+    }
+    pthread_mutex_unlock(&sdl_lock);
+    return used;
+}
+
+/* Mac virtual key codes to SDL scancodes (SDL 1.3 darwin_scancode_table). */
+static const uint8_t darwin_scancodes[128] = {
+    4, 22, 7, 9, 11, 10, 29, 27, 6, 25, 100, 5, 20, 26, 8, 21,
+    28, 23, 30, 31, 32, 33, 35, 34, 46, 38, 36, 45, 37, 39, 48, 18,
+    24, 47, 12, 19, 40, 15, 13, 52, 14, 51, 49, 54, 56, 17, 16, 55,
+    43, 44, 53, 42, 0, 41, 231, 227, 225, 57, 226, 224, 229, 230, 228, 0,
+    108, 99, 0, 85, 0, 87, 0, 83, 128, 129, 127, 84, 88, 0, 86, 109,
+    110, 103, 98, 89, 90, 91, 92, 93, 94, 95, 111, 96, 97, 0, 0, 0,
+    62, 63, 64, 60, 65, 66, 0, 68, 0, 104, 107, 105, 0, 67, 0, 69,
+    0, 106, 117, 74, 75, 76, 61, 77, 59, 78, 58, 80, 79, 81, 82, 0,
+};
+
+/* SDL keycodes: printable keys and the ASCII control keys are their
+   character on a US layout; everything else is the scancode with bit 30.
+   (The title reads the active layout itself through TIS for AZERTY.) */
+static uint32_t keycode_for_scancode(uint8_t scancode)
+{
+    if (scancode >= 4 && scancode <= 29) return 'a' + (scancode - 4);
+    if (scancode >= 30 && scancode <= 38) return '1' + (scancode - 30);
+    static const struct { uint8_t scancode; uint8_t sym; } ascii[] = {
+        {39, '0'}, {40, '\r'}, {41, 27}, {42, '\b'}, {43, '\t'}, {44, ' '}, {45, '-'},
+        {46, '='}, {47, '['}, {48, ']'}, {49, '\\'}, {51, ';'}, {52, '\''}, {53, '`'},
+        {54, ','}, {55, '.'}, {56, '/'}, {76, 127},
+    };
+    for (unsigned i = 0; i < sizeof(ascii) / sizeof(ascii[0]); ++i)
+        if (ascii[i].scancode == scancode) return ascii[i].sym;
+    return scancode | kSDLScancodeMask;
+}
+
+static uint16_t modifier_bit(uint8_t scancode)
+{
+    switch (scancode) {
+    case 225: return 0x0001; case 229: return 0x0002;   /* KMOD_LSHIFT, RSHIFT */
+    case 224: return 0x0040; case 228: return 0x0080;   /* KMOD_LCTRL, RCTRL */
+    case 226: return 0x0100; case 230: return 0x0200;   /* KMOD_LALT, RALT */
+    case 227: return 0x0400; case 231: return 0x0800;   /* KMOD_LGUI, RGUI */
+    case 57: return 0x2000;                             /* KMOD_CAPS */
+    default: return 0;
+    }
+}
+
+static uint16_t key_modifiers;
+static uint8_t keys_down[256];
+
+/* SDL_SendKeyboardKey: SDL_KeyboardEvent {type, windowID, state, repeat,
+   pad[2], keysym {scancode, sym, mod, unicode}}. */
+static void queue_key(uint8_t scancode, bool down, bool repeat, uint32_t unicode)
+{
+    if (!scancode) return;
+    uint16_t bit = modifier_bit(scancode);
+    if (bit && bit != 0x2000) key_modifiers = down ? key_modifiers | bit : key_modifiers & ~bit;
+    if (!down && !keys_down[scancode]) return;          /* SDL drops unmatched releases */
+    if (down && keys_down[scancode]) repeat = true;
+    keys_down[scancode] = down;
+    struct sdl_event event = {{0}};
+    uint32_t type = down ? kSDLKeyDown : kSDLKeyUp, sym = keycode_for_scancode(scancode), code = scancode;
+    memcpy(event.bytes, &type, 4);
+    event.bytes[8] = down;                              /* SDL_PRESSED */
+    event.bytes[9] = repeat;
+    memcpy(event.bytes + 12, &code, 4);
+    memcpy(event.bytes + 16, &sym, 4);
+    memcpy(event.bytes + 20, &key_modifiers, 2);
+    if (down && unicode_enabled) memcpy(event.bytes + 24, &unicode, 4);
+    queue_event(&event);
+}
+
+/* SDL_SendKeyboardText: UTF-8 text in a 32-byte field after type/windowID. */
+static void queue_text(NSString *characters)
+{
+    const char *utf8 = characters.UTF8String;
+    if (!utf8 || !utf8[0] || (uint8_t)utf8[0] < 32 || utf8[0] == 127) return;
+    if (!strncmp(utf8, "\xef\x9c", 2) || !strncmp(utf8, "\xef\x9d", 2) ||
+        !strncmp(utf8, "\xef\x9e", 2) || !strncmp(utf8, "\xef\x9f", 2)) return; /* function keys */
+    struct sdl_event event = {{0}};
+    uint32_t type = kSDLTextInput;
+    memcpy(event.bytes, &type, 4);
+    strlcpy((char *)event.bytes + 8, utf8, 32);
+    queue_event(&event);
+}
+
+/* Cocoa_PumpEvents/Cocoa_HandleKeyEvent: key events become SDL keyboard
+   events.  Returns true when AppKit must not see the event: only Command
+   shortcuts and modifier changes still go to NSApp (menus, flag state). */
+static bool translate_key_event(NSEvent *event)
+{
+    NSEventType type = event.type;
+    if (type != NSEventTypeKeyDown && type != NSEventTypeKeyUp && type != NSEventTypeFlagsChanged) return false;
+    uint8_t scancode = event.keyCode < 128 ? darwin_scancodes[event.keyCode] : 0;
+    if (type == NSEventTypeFlagsChanged) {
+        uint16_t bit = modifier_bit(scancode);
+        if (bit == 0x2000) {
+            bool locked = (event.modifierFlags & NSEventModifierFlagCapsLock) != 0;
+            key_modifiers = locked ? key_modifiers | bit : key_modifiers & ~bit;
+            queue_key(scancode, true, false, 0);
+            queue_key(scancode, false, false, 0);
+        } else if (bit) {
+            queue_key(scancode, !keys_down[scancode], false, 0);
+        }
+        return false;
+    }
+    bool down = type == NSEventTypeKeyDown;
+    uint32_t unicode = 0;
+    if (down && event.characters.length) {
+        unicode = [event.characters characterAtIndex:0];
+        if (unicode >= 0xf700 && unicode <= 0xf8ff) unicode = 0;   /* function-key private use */
+    }
+    queue_key(scancode, down, event.isARepeat, unicode);
+    if (down && unicode_enabled && !(event.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagControl)))
+        queue_text(event.characters);
+    return !(event.modifierFlags & NSEventModifierFlagCommand);
+}
+
 int sdl_bridge32_dispatch(const char *name, const uint32_t *a, uint64_t *result)
 {
     if (strncmp(name, "_SDL_", 5)) return 0;
@@ -267,7 +435,8 @@ int sdl_bridge32_dispatch(const char *name, const uint32_t *a, uint64_t *result)
        dispatch each event through NSApp (the title's own -sendEvent: and
        views take input from there).  This is also what services the run
        loop's timers and delayed performs while the game loop owns the main
-       thread.  SDL's own queue never receives events: no SDL window exists. */
+       thread.  As there, key events become SDL keyboard events: the title
+       reads its keys with SDL_PeepEvents (SDL_KEYDOWN..SDL_TEXTINPUT). */
     if (!strcmp(call, "PumpEvents")) {
         if (pthread_main_np()) {
             @autoreleasepool {
@@ -275,17 +444,19 @@ int sdl_bridge32_dispatch(const char *name, const uint32_t *a, uint64_t *result)
                     NSEvent *event = [NSApp nextEventMatchingMask:NSEventMaskAny untilDate:[NSDate distantPast]
                                                            inMode:NSDefaultRunLoopMode dequeue:YES];
                     if (!event) break;
-                    [NSApp sendEvent:event];
+                    if (!translate_key_event(event)) [NSApp sendEvent:event];
                 }
             }
         }
         return 1;
     }
-    if (!strcmp(call, "PeepEvents")) return 1;
+    if (!strcmp(call, "PeepEvents")) {
+        *result = (uint32_t)peep_events((uint8_t *)(uintptr_t)a[0], (int32_t)a[1], a[2], a[3], a[4]);
+        return 1;
+    }
     if (!strcmp(call, "EnableUNICODE")) {
-        static int unicode;
-        int previous = unicode;
-        if ((int32_t)a[0] >= 0) unicode = (int32_t)a[0] != 0;
+        int previous = unicode_enabled;
+        if ((int32_t)a[0] >= 0) unicode_enabled = (int32_t)a[0] != 0;
         *result = (uint32_t)previous;
         return 1;
     }
