@@ -909,6 +909,20 @@ static OSStatus host_audio_callback(void *refcon,
         }
     }
 
+    /* LP32_AUDIO_CAPTURE=path appends the raw output-unit input (what the
+       speakers would get) so muted test runs can still check the audio. */
+    static FILE *capture_file;
+    static int capture_state;
+    if (!capture_state) {
+        const char *path = getenv("LP32_AUDIO_CAPTURE");
+        capture_file = path && path[0] ? fopen(path, "wb") : NULL;
+        capture_state = 1;
+    }
+    if (capture_file && is_input_callback && host_list && status != kAudio_ParamError)
+        for (uint32_t index = 0; index < buffer_count; ++index)
+            if (host_list->mBuffers[index].mData)
+                fwrite(host_list->mBuffers[index].mData, 1, host_list->mBuffers[index].mDataByteSize, capture_file);
+
     /* Keep the complete guest audio path running during unattended tests,
        while ensuring that it cannot interrupt the user's system audio. */
     if (is_input_callback && mute_audio_output() && host_list) {

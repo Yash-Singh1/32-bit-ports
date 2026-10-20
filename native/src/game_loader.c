@@ -78,6 +78,11 @@ static void open_guest_diagnostic_log(const char *executable_path)
     }
     length = snprintf(path, sizeof(path), "%s/last-run.log", directory);
     if (length < 0 || (size_t)length >= sizeof(path)) return;
+    /* Keep the run before this one (a crash report the player has not sent
+       yet survives one more launch). */
+    char previous[PATH_MAX];
+    length = snprintf(previous, sizeof(previous), "%s/previous-run.log", directory);
+    if (length > 0 && (size_t)length < sizeof(previous)) rename(path, previous);
 
     guest_diagnostic_fd = open(path,
         O_WRONLY | O_CREAT | O_TRUNC | O_APPEND, 0600);
@@ -788,6 +793,9 @@ static void install_guest_crash_diagnostics(void)
     sigaction(SIGSEGV, &action, NULL);
     sigaction(SIGBUS, &action, NULL);
     sigaction(SIGILL, &action, NULL);
+    /* abort(): uncaught Objective-C/C++ exceptions and guest assertions.
+       abort() raises again with the default action after this returns. */
+    sigaction(SIGABRT, &action, NULL);
     action.sa_flags = SA_SIGINFO;
     sigaction(SIGTRAP, &action, NULL);
 }
