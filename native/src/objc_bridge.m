@@ -9,6 +9,7 @@
 #include "dispatch_bridge.h"
 #include "objc_legacy_bridge.h"
 #include "qtkit_bridge.h"
+#include <execinfo.h>
 #import <SystemConfiguration/SystemConfiguration.h>
 #include "carbon_bridge.h"
 #include "cfnetwork_bridge.h"
@@ -2218,6 +2219,21 @@ static void post_test_key_event_with_modifiers(NSWindow *window,
             modifierFlags:modifiers timestamp:[[NSProcessInfo processInfo] systemUptime]
             windowNumber:window.windowNumber context:nil eventNumber:0 clickCount:1
             pressure:is_down ? 1 : 0];
+        /* Unattended, the window never becomes key, and a view that refuses
+           first mouse (Gangstar's EAGLView) loses the click to activation.
+           Hand the button event to the view under it, as a key window would. */
+        if (click && background_test_mode() && lp32_profile()->title == LP32_TITLE_GANGSTAR) {
+            NSView *view = [window.contentView hitTest:where];
+            fprintf(stderr, "compat32: test click %.0f,%.0f hits %s\n", where.x, where.y,
+                    view ? class_getName(object_getClass(view)) : "nothing");
+            if (view) {
+                SEL selector = button == 0 ? (is_down ? @selector(mouseDown:) : @selector(mouseUp:)) :
+                               button == 1 ? (is_down ? @selector(rightMouseDown:) : @selector(rightMouseUp:)) :
+                               (is_down ? @selector(otherMouseDown:) : @selector(otherMouseUp:));
+                [view performSelector:selector withObject:click];
+                return;
+            }
+        }
         if (click) [NSApp postEvent:click atStart:NO];
         return;
     }
@@ -12120,7 +12136,11 @@ static int objc_bridge32_dispatch_body(const char *import_name,
             /* See the exit import handling in compat_runtime.c.  AppKit's
                normal termination teardown can wait forever on a quarantined
                mixed-ABI AUGraph, so the confirmed game quit ends here. */
-            fprintf(stderr, "compat32: guest requested AppKit termination\n");
+            fprintf(stderr, "compat32: guest requested AppKit termination (caller 0x%08x)\n", arguments[-1]);
+            if (getenv("LP32_TRACE_TERMINATE")) {
+                void *frames[64];
+                backtrace_symbols_fd(frames, backtrace(frames, 64), STDERR_FILENO);
+            }
             compat_runtime32_heap_report("AppKit-terminate");
             fflush(NULL);
             _Exit(EXIT_SUCCESS);

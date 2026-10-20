@@ -26,6 +26,11 @@ probes. COD2 apps use Apple's OpenGL; GLMetal also runs both editions as
 an opt-in. A standalone converter is available with
 `make -C native cod2-converter`. See [native/COD2.md](native/COD2.md).
 
+Gameloft's Mac App Store release of Gangstar: Miami Vindication (2011) is
+experimental: the intro movie, title screen and main menu run on GLMetal.
+`make -C native gangstar-converter` builds a converter that accepts the app,
+its folder or its disk image. See [native/GANGSTAR.md](native/GANGSTAR.md).
+
 Support for the original 32-bit Mac releases:
 
 | Game | Mac release | Status |
