@@ -27,7 +27,7 @@ an opt-in. A standalone converter is available with
 `make -C native cod2-converter`. See [native/COD2.md](native/COD2.md).
 
 Gameloft's Mac App Store release of Gangstar: Miami Vindication (2011) is
-experimental: the intro movie, title screen and main menu run on GLMetal.
+experimental: it reaches gameplay on GLMetal at Apple OpenGL's frame rate.
 `make -C native gangstar-converter` builds a converter that accepts the app,
 its folder or its disk image. See [native/GANGSTAR.md](native/GANGSTAR.md).
 

@@ -8,18 +8,22 @@ COD titles, with OpenGL through GLMetal by default.
 ## Validation status
 
 Experimental. Muted, background probes on macOS 26.5.2 with an Apple M5 Pro
-reach these points on both GLMetal and Apple's OpenGL:
+reach gameplay on both GLMetal and Apple's OpenGL:
 
-- the intro movie (`intro.mov`, played through the QTKit stand-in);
-- the title screen ("Press any key to continue") at 60 fps;
-- the main menu (Continue / New Game / Options / Info / Quit) over its animated
-  3D backdrops.
+- the intro movie (`intro.mov`, played through the QTKit stand-in), the title
+  screen and the main menu with its animated 3D backdrops;
+- New Game and Continue, the in-engine cutscenes (Skip works), and the open
+  world. HUD, minimap and tutorial prompts render, and WASD and the arrow
+  keys move the player;
+- at 960×600, GLMetal and Apple GL both hold about 58–60 fps while walking.
+  Captured frames match.
 
-Not yet verified: starting a game and gameplay, mouse and controller play,
-audio, save games, and long sessions. Once, in about 15 unattended launches, the
-game quit itself on the title screen. The game's `windowWillClose:` calls
-`[NSApp terminate:]`. `LP32_TRACE_TERMINATE=1` prints the native stack when
-that happens.
+Not yet verified: long sessions, missions beyond the opening, controllers,
+1920×1200 fullscreen frame rates, and the Mac App Store edition's receipt check.
+The tested copy had none. Out of roughly 20 unattended launches, the game
+quit itself twice on reaching the menu, both times while another copy of the
+game was running. The game's `windowWillClose:` calls `[NSApp terminate:]`.
+`LP32_TRACE_TERMINATE=1` prints the native stack when that happens.
 
 ## Building
 
@@ -102,8 +106,11 @@ LP32_TEST_KEY_FIFO=/tmp/keys LP32_AGL_CAPTURE_FRAME=/tmp/frame LP32_AGL_CAPTURE_
   arch -x86_64 build/Gangstar-Compat.app/Contents/MacOS/GangstarCompat
 ```
 
-Write `KEYCODE HOLD_SECONDS` lines (macOS virtual key codes) to the FIFO. Frames
+Write `KEYCODE HOLD_SECONDS [MODIFIERS [X Y]]` lines (macOS virtual key codes;
+1000–1002 are left/right/other clicks at window point X,Y) to the FIFO. Frames
 are written as PPM. Set `LP32_GL_BACKEND=metal|apple` to choose the renderer when
 launching the executable directly. Finder launches use the app's
 `LSEnvironment`. `LP32_TRACE_SDL=1` logs every SDL call. `LP32_TRACE_QTKIT=1`
-logs the movie stand-in.
+logs the movie stand-in. Saves live in `~/Library/<CFBundleExecutable>/`: give test
+copies their own executable name and bundle identifier, and set
+`LP32_NO_DIAGNOSTIC_LOG=1`, so they leave the player's saves and log alone.
