@@ -96,8 +96,7 @@ extension Converter {
         guard fm.isExecutableFile(atPath: loader.path) else {
             throw ConversionError.message("The converter is missing its game launcher. Use a complete copy of Gangstar-Converter.app.")
         }
-        // This also reports a missing Rosetta installation before downloading or copying.
-        try run("/usr/bin/arch", ["-x86_64", "/usr/bin/true"])
+        try checkRosetta()
         let metal = useGLMetal ? try validateGLMetal() : nil
         let runtime = try prepareRuntime()
         let temp = destination.appendingPathComponent(".gangstar-converting-\(UUID().uuidString)")

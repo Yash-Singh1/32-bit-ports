@@ -313,6 +313,17 @@ struct ConverterTests {
         let literal = "Call of Duty 4's $(touch SHOULD_NOT_EXIST) `date`; app"
         try expect(try converter.run("/usr/bin/printf", ["%s", literal]) == literal, "paths are passed as literal arguments")
         try rejects("failed child command") { try converter.run("/usr/bin/false", []) }
+        // An Intel-only executable run as arm64 fails like any Intel one without Rosetta.
+        let intelOnly = temp.appendingPathComponent("intel-only")
+        try converter.run("/usr/bin/lipo", ["/usr/bin/true", "-thin", "x86_64", "-output", intelOnly.path])
+        do {
+            try converter.checkRosetta(["-arm64", intelOnly.path])
+            throw ConversionError.message("FAIL: accepted a missing Rosetta")
+        } catch ConversionError.message(let text) {
+            try expect(text.contains("Rosetta 2 is not installed") && text.contains("softwareupdate --install-rosetta"),
+                       "missing Rosetta explains how to install it: \(text)")
+        }
+        try converter.checkRosetta()
         let started = Date()
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { converter.cancellation.cancel() }
         do {
@@ -323,6 +334,6 @@ struct ConverterTests {
         try rejects("cancelled conversion") { _ = try converter.convert(source: source, destination: destination) }
         try expect(try fm.contentsOfDirectory(atPath: destination.path).count == 13, "cancellation creates no unfinished output")
         try expect(try Data(contentsOf: source.appendingPathComponent("Contents/MacOS/Call of Duty 4")) == thin, "source remains untouched")
-        print("PASS: literal arguments, command failure, cancellation and source preservation")
+        print("PASS: literal arguments, command failure, missing Rosetta, cancellation and source preservation")
     }
 }

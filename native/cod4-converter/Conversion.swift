@@ -180,6 +180,22 @@ final class Converter {
         return text
     }
 
+    /// Runs a trivial Intel command before anything is downloaded or copied.
+    /// Without Rosetta 2, macOS refuses it with "Bad CPU type in executable".
+    func checkRosetta(_ probe: [String] = ["-x86_64", "/usr/bin/true"]) throws {
+        do {
+            try run("/usr/bin/arch", probe)
+        } catch ConversionError.message(let detail) where detail.contains("Bad CPU type") {
+            throw ConversionError.message("""
+                Rosetta 2 is not installed. Converted games are Intel apps, so this Mac needs Rosetta to run them.
+
+                To install it, open Terminal, run this command, then convert again:
+
+                softwareupdate --install-rosetta --agree-to-license
+                """)
+        }
+    }
+
     private func mounted(_ image: URL, at mount: URL, body: () throws -> Void) throws {
         // Even a cancelled attach may already have mounted the image. Always
         // detach our private mount point before removing the extraction folder.
@@ -302,8 +318,7 @@ final class Converter {
         guard fm.isExecutableFile(atPath: loader.path) else {
             throw ConversionError.message("The converter is missing its game launcher. Use a complete copy of \(game.short)-Converter.app.")
         }
-        // This also reports a missing Rosetta installation before downloading or copying.
-        try run("/usr/bin/arch", ["-x86_64", "/usr/bin/true"])
+        try checkRosetta()
         let metal = game.usesGLMetal ? try validateGLMetal() : nil
         let runtime = game.isCarbon ? try prepareRuntime() : nil
         let temp = destination.appendingPathComponent(".cod4-converting-\(UUID().uuidString)")
