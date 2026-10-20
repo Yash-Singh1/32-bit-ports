@@ -77,7 +77,7 @@
 #include <wchar.h>
 #include <unistd.h>
 
-extern uint32_t run_compat32(uint32_t eip, uint32_t esp, uint16_t cs32);
+extern uint64_t run_compat32(uint32_t eip, uint32_t esp, uint16_t cs32);
 extern void lp32_import_gateway(void);
 extern const uint8_t lp32_context_start[], lp32_context_end[];
 extern const uint8_t lp32_context_setjmp[], lp32_context_fast_setjmp[], lp32_context_sigsetjmp[];
@@ -194,6 +194,8 @@ int compat_runtime32_guest_symbol_matches(uint32_t address, const char *name) {
     return current_image && address && macho_image32_find_symbol(current_image, name) == address;
 }
 static _Thread_local int last_call_trapped;
+/* edx of the last guest call: the high half of an i386 pair return. */
+static _Thread_local uint32_t last_call_edx;
 static uint32_t keymgr_slots[64];
 
 enum {
@@ -1196,7 +1198,9 @@ static void emit_gateway64_pad(uint8_t *destination, uint32_t retry,
 }
 
 /* 64-bit pad reached from the exit thunk: restore the host ABI frame
-   established by run_compat32 and return to it with eax untouched. */
+   established by run_compat32 and return to it with the guest's edx:eax
+   packed into rax (i386 returns 8-byte values, NSPoint among them, in the
+   pair). */
 static void emit_return64_pad(uint8_t *destination, uint32_t retry,
                               uint16_t cs64)
 {
@@ -1209,13 +1213,17 @@ static void emit_return64_pad(uint8_t *destination, uint32_t retry,
         0x41, 0x5c,
         0x5b,
         0x5d,
+        0x48, 0xc1, 0xe2, 0x20,     /* shlq $32, %rdx */
+        0x89, 0xc0,                 /* movl %eax, %eax */
+        0x48, 0x09, 0xd0,           /* orq %rdx, %rax */
         0xc3,
     };
     uint8_t *p = destination;
     if (!mode_guards_disabled) {
         /* xorl %ecx,%ecx; inc-ecx-twice-or-inc-r9d; testl %ecx,%ecx; jnz */
         static const uint8_t probe[] = {0x31, 0xc9, 0x41, 0xff, 0xc1,
-                                        0x85, 0xc9, 0x75, 0x12};
+                                        0x85, 0xc9, 0x75, 0x1b};
+        _Static_assert(sizeof(return64) == 0x1b, "probe skips the return sequence");
         p = emit_bytes(p, probe, sizeof(probe));
     }
     p = emit_bytes(p, return64, sizeof(return64));
@@ -6828,15 +6836,21 @@ uint32_t compat_runtime32_call(uint32_t function, const uint32_t *arguments,
     lp32_leave_guest = 0;
     ++guest_call_depth;
     lp32_guest_execution_enter();
-    uint32_t result = run_compat32(lp32_landing32, (uint32_t)sp, lp32_cs32);
+    uint64_t pair = run_compat32(lp32_landing32, (uint32_t)sp, lp32_cs32);
     lp32_guest_execution_leave();
     --guest_call_depth;
-    return result;
+    last_call_edx = (uint32_t)(pair >> 32);
+    return (uint32_t)pair;
 }
 
 int compat_runtime32_last_call_trapped(void)
 {
     return last_call_trapped;
+}
+
+uint32_t compat_runtime32_last_call_edx(void)
+{
+    return last_call_edx;
 }
 
 struct guest_heap_test_slot {

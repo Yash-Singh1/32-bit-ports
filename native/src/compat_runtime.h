@@ -14,6 +14,8 @@ const struct macho_image32 *compat_runtime32_image(void);
 uint32_t compat_runtime32_call(uint32_t function, const uint32_t *arguments,
                                size_t argument_count);
 int compat_runtime32_last_call_trapped(void);
+/* edx of the last compat_runtime32_call on this thread (pair results). */
+uint32_t compat_runtime32_last_call_edx(void);
 uint32_t compat_runtime32_copy_cstring(const char *string);
 uint32_t compat_runtime32_allocate(size_t size, int clear);
 uint32_t compat_runtime32_reallocate(uint32_t pointer, size_t size);

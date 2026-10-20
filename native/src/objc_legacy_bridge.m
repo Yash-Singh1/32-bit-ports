@@ -302,6 +302,8 @@ int objc_legacy32_message(const uint32_t *a,uint64_t *out){
     if(getenv("LP32_TRACE_OBJC_SELECTORS"))fprintf(stderr,"LEGACY %s self=%08x tid=%u ra=%08x\n",sel,args[0],pthread_mach_thread_np(pthread_self()),a[-1]);
     for(unsigned i=2;i<n;++i)objc_bridge32_pin_event(args[i],1);
     *out=compat_runtime32_call(m->imp,args,n);
+    /* 8-byte results (NSPoint, NSSize, long long) come back in edx:eax. */
+    *out|=(uint64_t)compat_runtime32_last_call_edx()<<32;
     for(unsigned i=2;i<n;++i)objc_bridge32_pin_event(args[i],0);
     return 1;
 }
@@ -356,7 +358,8 @@ int objc_legacy32_super_message(void *receiver, void *parent, const uint32_t *a,
     NSMethodSignature *sig=[NSMethodSignature signatureWithObjCTypes:str(m->types)];unsigned n=2;
     for(NSUInteger i=2;i<sig.numberOfArguments;++i){size_t bytes=guest_size(type([sig getArgumentTypeAtIndex:i]));if(!bytes)return 0;n+=(unsigned)(bytes/4);}
     if(n>128)return 0;uint32_t args[128];memcpy(args,a,n*4);args[0]=objc_bridge32_guest_object(receiver);
-    *out=compat_runtime32_call(m->imp,args,n);return 1;
+    *out=compat_runtime32_call(m->imp,args,n);
+    *out|=(uint64_t)compat_runtime32_last_call_edx()<<32;return 1;
 }
 
 int objc_legacy32_run_lifetime_self_test(void) {
