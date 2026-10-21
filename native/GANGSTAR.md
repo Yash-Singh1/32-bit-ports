@@ -83,7 +83,15 @@ build/Gangstar-Converter.app/Contents/MacOS/GangstarConverter --convert SOURCE O
   context when the game first uses it (`attach_owning_view`). QTKit's `QTMovie` and
   `QTMovieView` come from `src/qtkit_bridge.m` on AVFoundation.
 - **Display:** the game switches modes with a display configuration
-  transaction. Each step succeeds and the native mode stays in effect.
+  transaction. Each step succeeds and the native mode stays in effect. The
+  game renders at the chosen resolution through a CGL backing size and sizes
+  its GL view to that resolution, which on a 2011 Mac matched the switched
+  display and its fullscreen window. In the borderless fullscreen window the
+  loader fits the view to the window at the resolution's aspect ratio, on
+  black, so smaller modes don't sit in a corner and larger ones (up to the
+  built-in panel's pixel size) aren't cropped. `transformMousePoint:` ignores
+  the view's x origin, so the loader subtracts it when the view is
+  pillarboxed.
 - **Other bridges:** object out-parameters (`NSError **`) get a host slot. When
   the game passes an object as its own `error:` slot (its IGP cache write), the
   error is dropped instead of AppKit writing into that object. IOKit matching
@@ -110,7 +118,10 @@ Write `KEYCODE HOLD_SECONDS [MODIFIERS [X Y]]` lines (macOS virtual key codes;
 1000–1002 are left/right/other clicks at window point X,Y) to the FIFO. Frames
 are written as PPM. Set `LP32_GL_BACKEND=metal|apple` to choose the renderer when
 launching the executable directly. Finder launches use the app's
-`LSEnvironment`. `LP32_TRACE_SDL=1` logs every SDL call. `LP32_TRACE_QTKIT=1`
+`LSEnvironment`. `LP32_TEST_GANGSTAR_RESOLUTION=WxH@FRAME` changes the resolution
+at that presented frame the way the settings menu does, and
+`LP32_TRACE_DISPLAY=1` logs mode requests, backing sizes and where the GL view
+and its Metal layer sit in the window. `LP32_TRACE_SDL=1` logs every SDL call. `LP32_TRACE_QTKIT=1`
 logs the movie stand-in. Saves live in `~/Library/<CFBundleExecutable>/`: give test
 copies their own executable name and bundle identifier, and set
 `LP32_NO_DIAGNOSTIC_LOG=1`, so they leave the player's saves and log alone.

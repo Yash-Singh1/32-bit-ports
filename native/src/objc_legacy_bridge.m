@@ -299,6 +299,16 @@ int objc_legacy32_message(const uint32_t *a,uint64_t *out){
     NSMethodSignature *sig=[NSMethodSignature signatureWithObjCTypes:str(m->types)];unsigned n=2;
     for(NSUInteger i=2;i<sig.numberOfArguments;++i){size_t bytes=guest_size(type([sig getArgumentTypeAtIndex:i]));if(!bytes)return 0;n+=(unsigned)(bytes/4);}
     uint32_t args[128];if(n>128)return 0;memcpy(args,a,n*4);args[0]=objc_bridge32_guest_object(object);
+    /* Gangstar maps window points to its resolution through the view frame
+       but ignores its x origin, which is non-zero only when a fullscreen
+       view is pillarboxed (gangstar_fit_fullscreen_view). */
+    if (lp32_profile()->title == LP32_TITLE_GANGSTAR && !strcmp(sel, "transformMousePoint:") &&
+        [object isKindOfClass:[NSView class]]) {
+        float x;
+        memcpy(&x, &args[2], sizeof x);
+        x -= (float)[(NSView *)object frame].origin.x;
+        memcpy(&args[2], &x, sizeof x);
+    }
     if(getenv("LP32_TRACE_OBJC_SELECTORS"))fprintf(stderr,"LEGACY %s self=%08x tid=%u ra=%08x\n",sel,args[0],pthread_mach_thread_np(pthread_self()),a[-1]);
     for(unsigned i=2;i<n;++i)objc_bridge32_pin_event(args[i],1);
     *out=compat_runtime32_call(m->imp,args,n);

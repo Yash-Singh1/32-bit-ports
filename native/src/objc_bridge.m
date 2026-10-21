@@ -1573,6 +1573,107 @@ static void attach_owning_view(NSOpenGLContext *context)
 #pragma clang diagnostic pop
 }
 
+/* LP32_TRACE_DISPLAY: where the context's view and its Metal layers end up
+   on screen, logged whenever that changes. */
+static void trace_gl_view_geometry(NSOpenGLContext *context)
+{
+    static int enabled = -1;
+    if (enabled < 0) enabled = getenv("LP32_TRACE_DISPLAY") != NULL;
+    if (!enabled) return;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    NSView *view = context.view;
+    if (!view) return;
+    void (^report)(void) = ^{
+        static NSString *last;
+        NSWindow *window = view.window;
+        NSScreen *screen = window.screen;
+        NSMutableString *text = [NSMutableString stringWithFormat:
+            @"window %@ level=%ld style=%lu options=%lu screen %@ visible %@ scale=%.1f view %@ best=%d",
+            NSStringFromRect(window.frame), (long)window.level, (unsigned long)window.styleMask,
+            (unsigned long)NSApp.presentationOptions, NSStringFromRect(screen.frame),
+            NSStringFromRect(screen.visibleFrame), screen.backingScaleFactor,
+            NSStringFromRect([view convertRect:view.bounds toView:nil]),
+            (int)view.wantsBestResolutionOpenGLSurface];
+        Class metal = NSClassFromString(@"CAMetalLayer");
+        NSMutableArray<CALayer *> *pending = [NSMutableArray array];
+        if (view.layer) [pending addObject:view.layer];
+        else for (NSView *subview in view.subviews) if (subview.layer) [pending addObject:subview.layer];
+        while (pending.count) {
+            CALayer *layer = pending.lastObject;
+            [pending removeLastObject];
+            [pending addObjectsFromArray:layer.sublayers ?: @[]];
+            if (![layer isKindOfClass:metal]) continue;
+            [text appendFormat:@" metal %@ drawable %@ contentsScale=%.1f",
+                NSStringFromRect([layer convertRect:layer.bounds toLayer:nil]),
+                NSStringFromSize([[layer valueForKey:@"drawableSize"] sizeValue]), layer.contentsScale];
+        }
+        if ([text isEqualToString:last]) return;
+        last = [text copy];
+        fprintf(stderr, "compat32: GL view geometry: %s\n", text.UTF8String);
+    };
+    if ([NSThread isMainThread]) report();
+    else dispatch_async(dispatch_get_main_queue(), report);
+#pragma clang diagnostic pop
+}
+
+/* LP32_TEST_GANGSTAR_RESOLUTION=WxH@FRAME: at that presented frame, change
+   the resolution the way the game's settings menu does. */
+static void gangstar_test_resolution_change(void)
+{
+    static unsigned frames;
+    static int width, height, frame = -1;
+    if (frame < 0) {
+        const char *spec = getenv("LP32_TEST_GANGSTAR_RESOLUTION");
+        if (!spec || sscanf(spec, "%dx%d@%d", &width, &height, &frame) != 3) frame = 0;
+    }
+    if (!frame || ++frames != (unsigned)frame) return;
+    id delegate = NSApp.delegate;
+    SEL selector = sel_registerName("setBackingSize::");
+    NSMethodSignature *signature = [delegate methodSignatureForSelector:selector];
+    if (!signature) return;
+    NSInvocation *call = [NSInvocation invocationWithMethodSignature:signature];
+    call.selector = selector;
+    [call setArgument:&width atIndex:2];
+    [call setArgument:&height atIndex:3];
+    fprintf(stderr, "compat32: test resolution change to %dx%d\n", width, height);
+    [call invokeWithTarget:delegate];
+}
+
+/* Gangstar sizes its GL view to the resolution chosen in its settings,
+   which on a 2011 Mac was also the display mode and therefore the size of
+   its fullscreen window.  The display keeps its native mode here, so a
+   smaller mode left the view in a corner and a larger one (the built-in
+   panel lists modes up to its pixel size) overflowed the window and was
+   cropped.  In the borderless fullscreen window the view is instead fitted
+   to the window at the mode's aspect ratio on black; the CGL backing size
+   the game sets scales its frame into the view, and transformMousePoint:
+   maps clicks through the view frame (see objc_legacy32_message). */
+static bool gangstar_fit_fullscreen_view(id receiver, const char *selector, const uint32_t *arguments)
+{
+    if (lp32_profile()->title != LP32_TITLE_GANGSTAR || strcmp(selector, "setFrame:") ||
+        ![receiver isKindOfClass:[NSView class]] ||
+        ![receiver respondsToSelector:@selector(openGLContext)])
+        return false;
+    NSView *view = receiver;
+    NSWindow *window = view.window;
+    if (!window || (window.styleMask & NSWindowStyleMaskTitled)) return false;
+    float requested[4];
+    memcpy(requested, arguments + 2, sizeof requested);
+    NSSize area = [window contentRectForFrameRect:window.frame].size;
+    if (requested[2] <= 0 || requested[3] <= 0 || area.width <= 0 || area.height <= 0) return false;
+    CGFloat scale = fmin(area.width / requested[2], area.height / requested[3]);
+    NSSize size = NSMakeSize(round(requested[2] * scale), round(requested[3] * scale));
+    NSRect fitted = NSMakeRect(floor((area.width - size.width) / 2),
+                               floor((area.height - size.height) / 2), size.width, size.height);
+    window.backgroundColor = [NSColor blackColor];
+    [view setFrame:fitted];
+    if (getenv("LP32_TRACE_DISPLAY"))
+        fprintf(stderr, "compat32: fullscreen GL view %.0fx%.0f fitted to %s\n",
+                requested[2], requested[3], NSStringFromRect(fitted).UTF8String);
+    return true;
+}
+
 static void mw2_request_gl_reattach(void)
 {
     if (!mw2_profile_active()) return;
@@ -9485,6 +9586,8 @@ static int objc_bridge32_dispatch_body(const char *import_name,
             CGLContextEnable capability = (CGLContextEnable)arguments[1];
             if (LP32_NAME_IS(import_name, import_length, "_CGLEnable"))
                 error = CGLEnable(context, capability);
+            if (capability == kCGLCESurfaceBackingSize && getenv("LP32_TRACE_DISPLAY"))
+                fprintf(stderr, "compat32: %.*s surface backing size\n", (int)import_length, import_name);
             else if (LP32_NAME_IS(import_name, import_length, "_CGLDisable"))
                 error = CGLDisable(context, capability);
             else
@@ -9524,6 +9627,8 @@ static int objc_bridge32_dispatch_body(const char *import_name,
                 values = &override_value;
             }
             error = CGLSetParameter(context, arguments[1], values);
+            if (arguments[1] == kCGLCPSurfaceBackingSize && values && getenv("LP32_TRACE_DISPLAY"))
+                fprintf(stderr, "compat32: CGL surface backing size %dx%d\n", values[0], values[1]);
         }
         *result = (uint32_t)error;
         return 1;
@@ -11894,6 +11999,10 @@ static int objc_bridge32_dispatch_body(const char *import_name,
             return handled;
         }
         if (handle_test_activation(receiver, selector_name, result)) return 1;
+        if (selector_name && gangstar_fit_fullscreen_view(receiver, selector_name, arguments)) {
+            *result = 0;
+            return 1;
+        }
         /* Creating, attaching, making current or presenting a context may
            give the current context different texture bindings. */
         if (receiver == [NSOpenGLContext class] ||
@@ -11903,6 +12012,11 @@ static int objc_bridge32_dispatch_body(const char *import_name,
             (!strcmp(selector_name, "makeCurrentContext") || !strcmp(selector_name, "flushBuffer")) &&
             [receiver isKindOfClass:[NSOpenGLContext class]])
             attach_owning_view((NSOpenGLContext *)receiver);
+        if (lp32_profile()->title == LP32_TITLE_GANGSTAR && !strcmp(selector_name, "flushBuffer") &&
+            [receiver isKindOfClass:[NSOpenGLContext class]]) {
+            trace_gl_view_geometry((NSOpenGLContext *)receiver);
+            gangstar_test_resolution_change();
+        }
         /* MW2 and Gangstar present with a plain -[NSOpenGLContext
            flushBuffer], not the Feral view's swapBuffers, so count and
            capture frames here. */
