@@ -956,7 +956,7 @@ static void runtime_diagnostic_line(const char *line)
 static const char *default_image_path(const char *argv0, char *buffer,
                                       size_t size)
 {
-    static const char *const candidates[] = {"LEGOPirates", "LEGOCloneWars", "LEGOMarvel", "LEGOCompleteSaga", "COD4", "COD4MP", "COD2", "COD2MP", "MW2", "MW2MP", "MW3", "MW3MP", "Gangstar"};
+    static const char *const candidates[] = {"LEGOPirates", "LEGOCloneWars", "LEGOMarvel", "LEGOCompleteSaga", "COD4", "COD4MP", "COD2", "COD2MP", "MW2", "MW2MP", "MW3", "MW3MP", "Gangstar", "Asphalt6"};
     const char *slash = strrchr(argv0, '/');
     size_t directory_length = slash ? (size_t)(slash - argv0) : 0;
     for (size_t index = 0; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {
@@ -1118,7 +1118,7 @@ int main(int argc, char **argv)
         }
         if (bink_imports) fprintf(stderr, "compat32: bound %u Bink imports to the original i386 library\n", bound);
     }
-    if (lp32_profile()->title == LP32_TITLE_GANGSTAR) {
+    if (lp32_title_is_gameloft(lp32_profile()->title)) {
         /* GCC 4.2 libstdc++ ABI (COW strings, iostreams, RTTI): bind every
            mangled import to Apple's private i386 runtime, as for COD4. */
         if (guest_dyld32_initialize(image_path) || guest_dyld32_bind_main_cxx(&image))

@@ -31,6 +31,12 @@ experimental: it reaches gameplay on GLMetal at Apple OpenGL's frame rate.
 `make -C native gangstar-converter` builds a converter that accepts the app,
 its folder or its disk image. See [native/GANGSTAR.md](native/GANGSTAR.md).
 
+Asphalt 6: Adrenaline for Mac has a separate experimental converter:
+`make -C native asphalt6-converter`. It accepts the Mac app, its folder, ZIP
+archive or disk image. Download [Asphalt 6 Converter 0.0.0-dev.1](https://github.com/Yash-Singh1/32-bit-ports/releases/tag/asphalt6-converter-v0.0.0-dev.1).
+See [native/ASPHALT6.md](native/ASPHALT6.md) for the
+current validation status and build instructions.
+
 Support for the original 32-bit Mac releases:
 
 | Game | Mac release | Status |

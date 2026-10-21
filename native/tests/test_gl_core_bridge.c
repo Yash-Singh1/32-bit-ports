@@ -1,5 +1,6 @@
 #define GL_SILENCE_DEPRECATION 1
 #include "gl_core_bridge.h"
+#include "game_profile.h"
 #include <OpenGL/OpenGL.h>
 #include <OpenGL/gl3.h>
 #include <assert.h>
@@ -12,6 +13,7 @@ int objc_bridge32_index_shadow_acquire(uint32_t offset,const void **pointer,uint
 void objc_bridge32_reconcile_fragment_shadows(void){}
 void objc_bridge32_index_shadow_release(uint32_t buffer){(void)buffer;}
 static uint64_t call(const char *name,const uint32_t *args){uint64_t out=0;assert(gl_core_bridge32_dispatch(name,args,&out));return out;}
+const struct lp32_game_profile *lp32_profile(void){static const struct lp32_game_profile profile={0};return &profile;}
 extern void glGetMaterialfv(uint32_t, uint32_t, float *);
 extern void glBegin(uint32_t);
 extern void glEnd(void);

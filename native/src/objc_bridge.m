@@ -1547,7 +1547,11 @@ static void attach_owning_view(NSOpenGLContext *context)
 {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    if (context.view || ![NSThread isMainThread]) return;
+    if (![NSThread isMainThread]) return;
+    if (context.view) {
+        install_window_test_input(context.view.window);
+        return;
+    }
     static NSUInteger attempts;
     if (attempts++ % 30) return;
     for (NSWindow *window in [NSApp windows]) {
@@ -2323,7 +2327,7 @@ static void post_test_key_event_with_modifiers(NSWindow *window,
         /* Unattended, the window never becomes key, and a view that refuses
            first mouse (Gangstar's EAGLView) loses the click to activation.
            Hand the button event to the view under it, as a key window would. */
-        if (click && background_test_mode() && lp32_profile()->title == LP32_TITLE_GANGSTAR) {
+        if (click && background_test_mode() && lp32_title_is_gameloft(lp32_profile()->title)) {
             NSView *view = [window.contentView hitTest:where];
             fprintf(stderr, "compat32: test click %.0f,%.0f hits %s\n", where.x, where.y,
                     view ? class_getName(object_getClass(view)) : "nothing");
@@ -2763,6 +2767,7 @@ static bool handle_test_activation(id receiver, const char *selector, uint64_t *
             if (strcmp(selector, "makeKeyAndOrderFront:") == 0 &&
                 [receiver isKindOfClass:[NSWindow class]]) {
                 place_test_window(receiver);
+                install_window_test_input(receiver);
                 [(NSWindow *)receiver orderFront:nil];
                 simulate_test_window_activation(receiver);
                 *result = 0;
@@ -8712,6 +8717,15 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         *result = arguments[0] ? kCVReturnSuccess : kCVReturnInvalidArgument;
         return 1;
     }
+    /* These Cocoa ports render from NSTimer and never start their link. */
+    if (LP32_NAME_IS(import_name, import_length, "_CVDisplayLinkIsRunning")) {
+        *result = false;
+        return 1;
+    }
+    if (LP32_NAME_IS(import_name, import_length, "_CVDisplayLinkStop")) {
+        *result = arguments[0] ? kCVReturnDisplayLinkNotRunning : kCVReturnInvalidArgument;
+        return 1;
+    }
     if (LP32_NAME_IS(import_name, import_length, "_CGGetLastMouseDelta")) {
         int32_t dx = 0, dy = 0;
 #pragma clang diagnostic push
@@ -12041,7 +12055,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         if (receiver == [NSOpenGLContext class] ||
             [receiver isKindOfClass:[NSOpenGLContext class]])
             texture_bind_cache_invalidate();
-        if (lp32_profile()->title == LP32_TITLE_GANGSTAR &&
+        if (lp32_title_is_gameloft(lp32_profile()->title) &&
             (!strcmp(selector_name, "makeCurrentContext") || !strcmp(selector_name, "flushBuffer")) &&
             [receiver isKindOfClass:[NSOpenGLContext class]])
             attach_owning_view((NSOpenGLContext *)receiver);
@@ -12053,7 +12067,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         /* MW2 and Gangstar present with a plain -[NSOpenGLContext
            flushBuffer], not the Feral view's swapBuffers, so count and
            capture frames here. */
-        if ((lp32_title_is_mw_sdl(lp32_profile()->title) || lp32_profile()->title == LP32_TITLE_GANGSTAR) &&
+        if ((lp32_title_is_mw_sdl(lp32_profile()->title) || lp32_title_is_gameloft(lp32_profile()->title)) &&
             !strcmp(selector_name, "flushBuffer") &&
             [receiver isKindOfClass:[NSOpenGLContext class]]) {
             if (mw2_gl_reattach_left > 0) {

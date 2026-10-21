@@ -3,6 +3,8 @@
  * No native pointer or host-sized integer is returned to guest memory. */
 #include "gl_core_bridge.h"
 #include "objc_bridge.h"
+#include "game_profile.h"
+#include "asphalt_glsl.h"
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -810,6 +812,18 @@ static uint64_t extra_glPixelStorei(const uint32_t *a,uint32_t site){
 static uint64_t extra_glGetBooleanv(const uint32_t *a,uint32_t site){
     (void)site;glGetBooleanv(a[0],(void *)(uintptr_t)a[1]);return 0;
 }
+static uint64_t extra_glGetActiveAttrib(const uint32_t *a,uint32_t site){
+    (void)site;
+    glGetActiveAttrib(a[0],a[1],(GLsizei)a[2],(GLsizei *)(uintptr_t)a[3],
+        (GLint *)(uintptr_t)a[4],(GLenum *)(uintptr_t)a[5],(GLchar *)(uintptr_t)a[6]);
+    return 0;
+}
+static uint64_t extra_glGetActiveUniform(const uint32_t *a,uint32_t site){
+    (void)site;
+    glGetActiveUniform(a[0],a[1],(GLsizei)a[2],(GLsizei *)(uintptr_t)a[3],
+        (GLint *)(uintptr_t)a[4],(GLenum *)(uintptr_t)a[5],(GLchar *)(uintptr_t)a[6]);
+    return 0;
+}
 static uint64_t extra_glGetBufferSubData(const uint32_t *a,uint32_t site){
     (void)site;glGetBufferSubData(a[0],(int32_t)a[1],(int32_t)a[2],(void *)(uintptr_t)a[3]);return 0;
 }
@@ -929,6 +943,9 @@ static uint64_t extra_glTexCoord2f(const uint32_t *a,uint32_t site){
 static uint64_t extra_glVertex2f(const uint32_t *a,uint32_t site){
     (void)site;glVertex2f(f32(a[0]),f32(a[1]));return 0;
 }
+static uint64_t extra_glVertexAttrib4f(const uint32_t *a,uint32_t site){
+    (void)site;glVertexAttrib4f(a[0],f32(a[1]),f32(a[2]),f32(a[3]),f32(a[4]));return 0;
+}
 /* GLU defines gluOrtho2D as glOrtho with near -1 and far 1; issuing it
    here keeps it on the selected GL backend. */
 /* Gangstar's fixed-function entry points with float/double arguments. */
@@ -1009,6 +1026,8 @@ lp32_fast_import_fn gl_core_bridge32_fast_import(const char *name){
     if(!strcmp(name,"glPopClientAttrib"))return extra_glPopClientAttrib;
     if(!strcmp(name,"glPixelStorei"))return extra_glPixelStorei;
     if(!strcmp(name,"glGetBooleanv"))return extra_glGetBooleanv;
+    if(!strcmp(name,"glGetActiveAttrib"))return extra_glGetActiveAttrib;
+    if(!strcmp(name,"glGetActiveUniform"))return extra_glGetActiveUniform;
     if(!strcmp(name,"glGetBufferSubData"))return extra_glGetBufferSubData;
     if(!strcmp(name,"glGetCompressedTexImage"))return extra_glGetCompressedTexImage;
     if(!strcmp(name,"glGetFramebufferAttachmentParameteriv"))return extra_glGetFramebufferAttachmentParameteriv;
@@ -1022,6 +1041,7 @@ lp32_fast_import_fn gl_core_bridge32_fast_import(const char *name){
     if(!strcmp(name,"glDrawElementsInstancedARB"))return extra_glDrawElementsInstancedARB;
     if(!strcmp(name,"glTexCoord2f"))return extra_glTexCoord2f;
     if(!strcmp(name,"glVertex2f"))return extra_glVertex2f;
+    if(!strcmp(name,"glVertexAttrib4f"))return extra_glVertexAttrib4f;
     if(!strcmp(name,"gluOrtho2D"))return extra_gluOrtho2D;
     if(!strcmp(name,"glLightModelf"))return extra_glLightModelf;
     if(!strcmp(name,"glLineWidth"))return extra_glLineWidth;
@@ -1236,7 +1256,11 @@ static uint64_t shader_source(const uint32_t *a,uint32_t site) {
         }
         if (can_rewrite && !append_shader_bytes(&joined, &joined_len, &joined_cap, text, piece)) can_rewrite = 0;
     }
-    char *rewritten = can_rewrite ? gl_core_bridge32_rewrite_glsl_shadows(joined, joined_len) : NULL;
+    char *asphalt = can_rewrite && lp32_profile()->title==LP32_TITLE_ASPHALT6 ?
+        lp32_asphalt_rewrite_glsl(joined,joined_len):NULL;
+    const char *effective=asphalt?asphalt:joined;
+    size_t effective_len=asphalt?strlen(asphalt):joined_len;
+    char *rewritten = can_rewrite ? gl_core_bridge32_rewrite_glsl_shadows(effective, effective_len) : NULL;
     const char *dump = getenv("LP32_DUMP_GLSL");
     if (dump && can_rewrite) {
         char path[4096];
@@ -1247,16 +1271,20 @@ static uint64_t shader_source(const uint32_t *a,uint32_t site) {
     if (rewritten) {
         const char *one = rewritten;
         glShaderSource(a[0], 1, &one, NULL);
-        remember_shadow_original(a[0], joined, joined_len);
+        remember_shadow_original(a[0], effective, effective_len);
         if (shadow_rewrite_logs < 8) {
             ++shadow_rewrite_logs;
             fprintf(stderr, "compat32: GLSL shadow samples outside the map stay lit (shader %u, %zu bytes)\n", a[0], joined_len);
         }
         free(rewritten);
+    } else if(asphalt) {
+        const char *one=asphalt;
+        glShaderSource(a[0],1,&one,NULL);
     } else {
         glShaderSource(a[0],count,strings,(void *)(uintptr_t)a[3]);
     }
     free(strings);
+    free(asphalt);
     free(joined);
     return 0;
 }

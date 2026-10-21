@@ -18,6 +18,7 @@
  * boundary, never raw copies of NSWindow/NSApplication object layouts. */
 struct class32 { uint32_t isa,super,name,version,info,size,ivars,methods,cache,protocols,layout,extension; };
 struct method32 {uint32_t name,types,imp;};
+struct ivar32 {uint32_t name,types,offset;};
 struct category32 {uint32_t name,klass,instance_methods,class_methods,protocols,size,properties;};
 static struct category32 *categories[512];
 static unsigned category_count;
@@ -124,6 +125,8 @@ static size_t guest_size(const char *t){
     switch(*t){case 'v':return 0;case 'd':case 'q':case 'Q':return 8;case '{':
         if(strstr(t,"CGRect=")||strstr(t,"_NSRect="))return 16;
         if(strstr(t,"CGPoint=")||strstr(t,"CGSize=")||strstr(t,"_NSPoint=")||strstr(t,"_NSSize=")||strstr(t,"_NSRange="))return 8;
+        /* Asphalt's screen geometry is a by-value record of nine floats. */
+        if(strstr(t,"=fffffffff}"))return 36;
         return 0;
         default:return 4;}
 }
@@ -215,7 +218,39 @@ static void legacy_initialize(id self, SEL command) {
     compat_runtime32_call(m->imp,args,2);
 }
 static bool runs_guest_initialize(void){
-    return lp32_profile()->title==LP32_TITLE_GANGSTAR;
+    return lp32_title_is_gameloft(lp32_profile()->title);
+}
+/* Nib outlets have no native ivar when the object's storage lives in the
+   guest arena. Let KVC connect object outlets to that storage by name. */
+static void legacy_set_value(id self, SEL command, id value, NSString *key) {
+    const char *name=key.UTF8String;
+    if(lp32_profile()->title==LP32_TITLE_ASPHALT6 &&
+       !strcmp(class_getName(object_getClass(self)),"Asphalt6AppDelegate") &&
+       !strcmp(name,"window"))name="customWindow";
+    for(Class cls=object_getClass(self);cls;cls=class_getSuperclass(cls)) {
+        struct class_entry *entry=NULL;
+        for(unsigned i=0;i<class_count;++i)if(classes[i].native==cls){entry=&classes[i];break;}
+        if(!entry || !entry->guest->ivars)continue;
+        uint32_t *list=(void *)(uintptr_t)entry->guest->ivars;
+        struct ivar32 *ivars=(void *)(list+1);
+        for(unsigned i=0;i<list[0];++i) {
+            if(strcmp(str(ivars[i].name),name) || *str(ivars[i].types)!='@')continue;
+            uint32_t token=objc_legacy32_token(self);
+            if(!token || ivars[i].offset>entry->guest->size-4)break;
+            *(uint32_t *)(uintptr_t)(token+ivars[i].offset)=objc_bridge32_guest_object(value);
+            return;
+        }
+    }
+    struct class_entry *entry=entry_for_native(object_getClass(self));
+    Class parent=class_getSuperclass(entry?entry->native:object_getClass(self));
+    while(parent && class_getMethodImplementation(parent,command)==(IMP)legacy_set_value)
+        parent=class_getSuperclass(parent);
+    struct objc_super super={self,parent};
+    ((void(*)(struct objc_super *,SEL,id,id))objc_msgSendSuper)(&super,command,value,key);
+}
+static void legacy_set_asphalt_outlet(id self, SEL command, id value) {
+    NSString *key=command==sel_registerName("setWindow:")?@"window":@"m_viewWindow";
+    legacy_set_value(self,@selector(setValue:forKey:),value,key);
 }
 static void add_methods(Class native,struct class_entry *c,bool meta){
     struct class32 *g=meta?(void *)(uintptr_t)c->guest->isa:c->guest;if(!g->methods)return;
@@ -249,9 +284,14 @@ static void add_methods(Class native,struct class_entry *c,bool meta){
         }
     }
     class_addMethod(native,@selector(forwardInvocation:),(IMP)forward,"v@:@");
-    if(!meta)class_addMethod(native,sel_registerName("dealloc"),(IMP)legacy_dealloc,"v@:");
+    if(!meta){
+        class_addMethod(native,sel_registerName("dealloc"),(IMP)legacy_dealloc,"v@:");
+        class_addMethod(native,@selector(setValue:forKey:),(IMP)legacy_set_value,"v@:@@");
+        class_addMethod(native,@selector(setValue:forUndefinedKey:),(IMP)legacy_set_value,"v@:@@");
+    }
 }
 void *objc_legacy32_class(const char *name){
+    if(!name || !*name)return NULL;
     scan();Class existing=objc_getClass(name);if(existing)return existing;
     struct class_entry *c=NULL;for(unsigned i=0;i<class_count;++i)if(!strcmp(str(classes[i].guest->name),name)){c=&classes[i];break;}
     if(!c){
@@ -260,13 +300,22 @@ void *objc_legacy32_class(const char *name){
         if(!strcmp(name,"GameWindow"))return objc_getClass("LP32CiderGameWindow");
         return qtkit_bridge32_class(name);
     }
-    Class parent=objc_legacy32_class(str(c->guest->super));if(!parent)return NULL;
+    /* A legacy root class has no superclass name. Asphalt's CustomControl
+       is an empty root class; register it without inventing a superclass. */
+    Class parent=c->guest->super?objc_legacy32_class(str(c->guest->super)):Nil;
+    if(c->guest->super&&!parent)return NULL;
     if (lp32_gl_backend_is_replacement() && parent == [NSOpenGLContext class]) {
         Class replacement = objc_getClass(lp32_gl_backend_context_class());
         if (replacement) parent = replacement;
     }
     Class native=objc_allocateClassPair(parent,name,0);if(!native)return objc_getClass(name);
     c->native=native;add_methods(native,c,false);add_methods(object_getClass(native),c,true);
+    /* NSNibOutletConnector first looks for setters. The original nib uses
+       direct fragile-ABI ivars, which do not exist on the native stand-in. */
+    if(lp32_profile()->title==LP32_TITLE_ASPHALT6 && !strcmp(name,"Asphalt6AppDelegate")) {
+        class_addMethod(native,sel_registerName("setWindow:"),(IMP)legacy_set_asphalt_outlet,"v@:@");
+        class_addMethod(native,sel_registerName("setM_viewWindow:"),(IMP)legacy_set_asphalt_outlet,"v@:@");
+    }
     objc_registerClassPair(native);return native;
 }
 void objc_legacy32_register_classes(void){
@@ -274,7 +323,7 @@ void objc_legacy32_register_classes(void){
 }
 void *objc_legacy32_application_class(void){
     scan();for(unsigned i=0;i<class_count;++i)
-        if(!strcmp(str(classes[i].guest->super),"NSApplication"))
+        if(classes[i].guest->super && !strcmp(str(classes[i].guest->super),"NSApplication"))
             return objc_legacy32_class(str(classes[i].guest->name));
     return [NSApplication class];
 }
@@ -375,17 +424,28 @@ int objc_legacy32_super_message(void *receiver, void *parent, const uint32_t *a,
 int objc_legacy32_run_lifetime_self_test(void) {
     scan();
     if(class_count>=512)return -1;
-    uint32_t metadata=compat_runtime32_allocate(sizeof(struct class32),1);
+    uint32_t metadata=compat_runtime32_allocate(sizeof(struct class32)+4+sizeof(struct ivar32),1);
     if(!metadata)return -1;
     struct class32 *guest=(void *)(uintptr_t)metadata;
-    guest->name=compat_runtime32_copy_cstring("LP32LifetimeTest");guest->size=4;
+    guest->name=compat_runtime32_copy_cstring("LP32LifetimeTest");guest->size=8;
+    guest->ivars=metadata+sizeof(*guest);
+    *(uint32_t *)(uintptr_t)guest->ivars=1;
+    struct ivar32 *outlet=(void *)(uintptr_t)(guest->ivars+4);
+    *outlet=(struct ivar32){compat_runtime32_copy_cstring("outlet"),compat_runtime32_copy_cstring("@"),4};
     Class cls=objc_allocateClassPair([NSObject class],"LP32LifetimeTest",0);
     if(!cls)return -1;
     class_addMethod(cls,sel_registerName("dealloc"),(IMP)legacy_dealloc,"v@:");
+    class_addMethod(cls,@selector(setValue:forKey:),(IMP)legacy_set_value,"v@:@@");
     objc_registerClassPair(cls);
     classes[class_count++]=(struct class_entry){guest,cls};
     id object=[[cls alloc] init];uint32_t token=objc_legacy32_token(object);
     bool valid=token && objc_legacy32_object(token)==object;
+    [object setValue:@"connected" forKey:@"outlet"];
+    valid=valid && [(id)objc_bridge32_host_object(*(uint32_t *)(uintptr_t)(token+4)) isEqual:@"connected"];
+    [object setValue:nil forKey:@"outlet"];
+    valid=valid && !*(uint32_t *)(uintptr_t)(token+4);
+    /* This fixture has no superclass name, like a legacy root class. */
+    valid=valid && objc_legacy32_application_class()!=NULL;
     [object release];
     valid=valid && objc_legacy32_object(token)==NULL;
     uint64_t pool = 0, result = 0;
@@ -401,8 +461,9 @@ int objc_legacy32_run_lifetime_self_test(void) {
     valid = valid && objc_bridge32_dispatch("_objc_msgSend", drain, &result);
     valid = valid && objc_legacy32_object(token) == NULL;
     --class_count;
+    compat_runtime32_deallocate(outlet->name);compat_runtime32_deallocate(outlet->types);
     compat_runtime32_deallocate(guest->name);compat_runtime32_deallocate(metadata);
-    if(valid)puts("Legacy Objective-C lifetime self-test: PASS (identity map permits deallocation; guest autorelease scope preserves subclasses)");
+    if(valid)puts("Legacy Objective-C lifetime self-test: PASS (deallocation, autorelease scopes, nib object outlets, root-class scan)");
     return valid?0:-1;
 }
 

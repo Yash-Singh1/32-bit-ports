@@ -2853,6 +2853,10 @@ int carbon_bridge32_dispatch(const char *name, const uint32_t *a,
     return 1;
   }
   if (IS("_UpTime")) { *out = F(uint64_t, void)(); return 1; }
+  if (IS("_AbsoluteToDuration")) {
+    *out = (uint32_t)F(int32_t, uint64_t)((uint64_t)a[0] | (uint64_t)a[1] << 32);
+    return 1;
+  }
   if (IS("_AddDurationToAbsolute")) {
     *out = F(uint64_t, int32_t, uint64_t)((int32_t)a[0], (uint64_t)a[1] | (uint64_t)a[2] << 32);
     return 1;
@@ -3386,6 +3390,13 @@ int carbon_bridge32_run_dispatch_self_test(void) {
   for (unsigned i = 0; i < 10000; ++i)
     if (!carbon_bridge32_dispatch("_GetCurrentEventTime", args, &result)) return -1;
   if (symbol_lookups != before) return -1;
+  /* Preserve both words of the i386 AbsoluteTime argument used by Asphalt. */
+  uint64_t ticks=UINT64_C(0x123456789);
+  args[0]=(uint32_t)ticks;args[1]=(uint32_t)(ticks>>32);
+  int32_t (*absolute_to_duration)(uint64_t)=symbol("_AbsoluteToDuration");
+  if(!absolute_to_duration ||
+     !carbon_bridge32_dispatch("_AbsoluteToDuration",args,&result) ||
+     (int32_t)result!=absolute_to_duration(ticks))return -1;
   /* The hot atomic import used by Marvel must keep its 32-bit ABI and memory
      ordering when resolved through the runtime's cached callback route. */
   uint32_t cell = compat_runtime32_allocate(4, 1);

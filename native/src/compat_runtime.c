@@ -1602,7 +1602,7 @@ static uint32_t guest_context_symbol(const char *name)
 {
     if (!lp32_title_is_cod_carbon(lp32_profile()->title) &&
         !lp32_title_is_mw_sdl(lp32_profile()->title) &&
-        lp32_profile()->title != LP32_TITLE_GANGSTAR) return 0;
+        !lp32_title_is_gameloft(lp32_profile()->title)) return 0;
     const uint8_t *entry = NULL;
     if (!strcmp(name, "_setjmp")) entry = lp32_context_setjmp;
     else if (!strcmp(name, "__setjmp")) entry = lp32_context_fast_setjmp;
@@ -5719,6 +5719,11 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
         if (duration < 0) return (uint64_t)-(int64_t)duration * 1000;
         return (uint64_t)duration * 1000000;
     }
+    /* Darwin i386 returns the two 32-bit div_t fields in EDX:EAX. */
+    if (import_is(name, "_div")) {
+        div_t value=div((int32_t)arguments[0],(int32_t)arguments[1]);
+        return (uint32_t)value.quot|((uint64_t)(uint32_t)value.rem<<32);
+    }
     /* SDL's power query treats a missing power-source blob as unknown. */
     if (import_is(name, "_IOPSCopyPowerSourcesInfo") ||
         import_is(name, "_IOPSCopyPowerSourcesList") ||
@@ -8062,6 +8067,19 @@ int compat_runtime32_run_sync_self_test(void)
         uint32_t join[] = {token, thread_cells + 4};
         if (compat_runtime32_dispatch_import("_pthread_join", join) ||
             *(uint32_t *)(uintptr_t)(thread_cells + 4) != 0x1234 || host_thread(token)) return -1;
+    }
+    /* div_t is an eight-byte register return, including a signed remainder. */
+    uint32_t div_thunk=compat_runtime32_guest_callback("_div");
+    uint8_t div_code[]={0x8b,0x44,0x24,0x04,0x8b,0x54,0x24,0x08,
+        0x83,0xec,0x0c,0x89,0x04,0x24,0x89,0x54,0x24,0x04,
+        0xe8,0,0,0,0,0x83,0xc4,0x0c,0xc3};
+    relative=(int32_t)(div_thunk-((uintptr_t)thread_code+23));
+    memcpy(div_code+19,&relative,4);memcpy(thread_code,div_code,sizeof(div_code));
+    const int32_t divisions[][4]={{17,5,3,2},{-17,5,-3,-2},{17,-5,-3,2}};
+    for(unsigned i=0;i<3;++i) {
+        uint32_t a[]={(uint32_t)divisions[i][0],(uint32_t)divisions[i][1]};
+        if((int32_t)compat_runtime32_call((uint32_t)(uintptr_t)thread_code,a,2)!=divisions[i][2] ||
+           (int32_t)compat_runtime32_last_call_edx()!=divisions[i][3])return -1;
     }
     munmap(thread_code, 4096); guest_deallocate(thread_cells);
     const uint32_t durations[] = {0, 250, (uint32_t)-750, INT32_MAX};
