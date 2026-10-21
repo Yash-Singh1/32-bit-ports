@@ -91,7 +91,10 @@ build/Gangstar-Converter.app/Contents/MacOS/GangstarConverter --convert SOURCE O
   black, so smaller modes don't sit in a corner and larger ones (up to the
   built-in panel's pixel size) aren't cropped. `transformMousePoint:` ignores
   the view's x origin, so the loader subtracts it when the view is
-  pillarboxed.
+  pillarboxed. The resolution menu looks its saved resolution up among the
+  display's modes and reads past its list when it is missing (a resolution
+  saved on the built-in panel, then an external main display), so the saved
+  resolution is offered as a mode of the current display.
 - **Other bridges:** object out-parameters (`NSError **`) get a host slot. When
   the game passes an object as its own `error:` slot (its IGP cache write), the
   error is dropped instead of AppKit writing into that object. IOKit matching

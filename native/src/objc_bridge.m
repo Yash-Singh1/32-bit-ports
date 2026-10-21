@@ -5154,6 +5154,38 @@ static NSDictionary *legacy_current_mode_for_display(CGDirectDisplayID display)
     return match;
 }
 
+/* Gangstar's resolution menu lists the display's modes at the current
+   refresh rate and finds its saved resolution among them; a resolution saved
+   on another display (the built-in panel's 1728x1117 with an external monitor
+   as the main display) is not found and the menu reads past the end of its
+   list.  The display mode is never really switched (the GL view is fitted to
+   the window instead), so the saved resolution is offered as a mode of the
+   display at the current refresh rate. */
+static NSArray *gangstar_modes_with_saved_resolution(CGDirectDisplayID display, NSArray *modes)
+{
+    if (lp32_profile()->title != LP32_TITLE_GANGSTAR) return modes;
+    NSInteger width = [[NSUserDefaults standardUserDefaults] integerForKey:@"ScreenWidth"];
+    NSInteger height = [[NSUserDefaults standardUserDefaults] integerForKey:@"ScreenHeight"];
+    NSDictionary *current = legacy_current_mode_for_display(display);
+    if (width <= 0 || height <= 0 || width > 0xffff || height > 0xffff || !current) return modes;
+    double refresh = [[current objectForKey:@"RefreshRate"] doubleValue];
+    for (NSDictionary *mode in modes) {
+        if ([[mode objectForKey:@"Width"] integerValue] == width &&
+            [[mode objectForKey:@"Height"] integerValue] == height &&
+            lrint([[mode objectForKey:@"RefreshRate"] doubleValue]) == lrint(refresh))
+            return modes;
+    }
+    NSMutableDictionary *saved = [[current mutableCopy] autorelease];
+    [saved setObject:[NSNumber numberWithUnsignedLongLong:(unsigned long long)width] forKey:@"Width"];
+    [saved setObject:[NSNumber numberWithUnsignedLongLong:(unsigned long long)height] forKey:@"Height"];
+    [saved setObject:[NSNumber numberWithUnsignedLongLong:(unsigned long long)width * 4]
+              forKey:@"kCGDisplayBytesPerRow"];
+    if (getenv("LP32_TRACE_DISPLAY"))
+        fprintf(stderr, "compat32: offering saved resolution %ldx%ld as a mode of display %u\n",
+                (long)width, (long)height, display);
+    return [modes arrayByAddingObject:saved];
+}
+
 void objc_bridge32_display_size(uint32_t display, int32_t size[2]) {
     NSDictionary *mode = legacy_current_mode_for_display(display);
     size[0] = [[mode objectForKey:@"Width"] intValue];
@@ -9193,7 +9225,8 @@ static int objc_bridge32_dispatch_body(const char *import_name,
     if (LP32_NAME_IS(import_name, import_length, "_CGDisplayAvailableModes") ||
         LP32_NAME_IS(import_name, import_length, "_CGDisplayCopyAllDisplayModes")) {
         materialize_automatic_display_mode();
-        NSArray *modes = legacy_modes_for_display(arguments[0]);
+        NSArray *modes = gangstar_modes_with_saved_resolution(
+            arguments[0], legacy_modes_for_display(arguments[0]));
         if (getenv("LP32_TRACE_DISPLAY")) {
             fprintf(stderr, "compat32: display %u has %lu legacy modes\n",
                     arguments[0], (unsigned long)[modes count]);
