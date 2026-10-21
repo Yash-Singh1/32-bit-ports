@@ -1652,7 +1652,10 @@ static void gangstar_test_resolution_change(void)
    cropped.  In the borderless fullscreen window the view is instead fitted
    to the window at the mode's aspect ratio on black; the CGL backing size
    the game sets scales its frame into the view, and transformMousePoint:
-   maps clicks through the view frame (see objc_legacy32_message). */
+   maps clicks through the view frame (see objc_legacy32_message).
+   On a display with a camera housing macOS moves a window that covers the
+   strip beside it down by the strip's height, pushing the bottom of the
+   picture off screen, so the window is first shrunk to the safe area. */
 static bool gangstar_fit_fullscreen_view(id receiver, const char *selector, const uint32_t *arguments)
 {
     if (lp32_profile()->title != LP32_TITLE_GANGSTAR || strcmp(selector, "setFrame:") ||
@@ -1664,6 +1667,21 @@ static bool gangstar_fit_fullscreen_view(id receiver, const char *selector, cons
     if (!window || (window.styleMask & NSWindowStyleMaskTitled)) return false;
     float requested[4];
     memcpy(requested, arguments + 2, sizeof requested);
+    NSScreen *screen = window.screen;
+    if (@available(macOS 12.0, *)) if (screen) {
+        NSEdgeInsets insets = screen.safeAreaInsets;
+        NSRect safe = screen.frame;
+        safe.origin.x += insets.left;
+        safe.origin.y += insets.bottom;
+        safe.size.width -= insets.left + insets.right;
+        safe.size.height -= insets.top + insets.bottom;
+        if (!NSEqualRects(window.frame, safe) && NSContainsRect(window.frame, safe)) {
+            [window setFrame:safe display:NO];
+            if (getenv("LP32_TRACE_DISPLAY"))
+                fprintf(stderr, "compat32: fullscreen window fitted to safe area %s\n",
+                        NSStringFromRect(safe).UTF8String);
+        }
+    }
     NSSize area = [window contentRectForFrameRect:window.frame].size;
     if (requested[2] <= 0 || requested[3] <= 0 || area.width <= 0 || area.height <= 0) return false;
     CGFloat scale = fmin(area.width / requested[2], area.height / requested[3]);

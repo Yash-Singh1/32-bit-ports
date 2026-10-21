@@ -350,13 +350,17 @@ int objc_legacy32_message(const uint32_t *a,uint64_t *out){
     uint32_t args[128];if(n>128)return 0;memcpy(args,a,n*4);args[0]=objc_bridge32_guest_object(object);
     /* Gangstar maps window points to its resolution through the view frame
        but ignores its x origin, which is non-zero only when a fullscreen
-       view is pillarboxed (gangstar_fit_fullscreen_view). */
+       view is pillarboxed (gangstar_fit_fullscreen_view).  Points outside
+       the view (the bars, or the notch strip above a fullscreen window) are
+       clamped to its edge so the game's cursor stays inside the picture. */
     if (lp32_profile()->title == LP32_TITLE_GANGSTAR && !strcmp(sel, "transformMousePoint:") &&
         [object isKindOfClass:[NSView class]]) {
-        float x;
-        memcpy(&x, &args[2], sizeof x);
-        x -= (float)[(NSView *)object frame].origin.x;
-        memcpy(&args[2], &x, sizeof x);
+        NSRect frame = [(NSView *)object frame];
+        float point[2];
+        memcpy(point, &args[2], sizeof point);
+        point[0] = fminf(fmaxf(point[0] - (float)frame.origin.x, 0), (float)frame.size.width);
+        point[1] = fminf(fmaxf(point[1], (float)frame.origin.y), (float)NSMaxY(frame));
+        memcpy(&args[2], point, sizeof point);
     }
     if(getenv("LP32_TRACE_OBJC_SELECTORS"))fprintf(stderr,"LEGACY %s self=%08x tid=%u ra=%08x\n",sel,args[0],pthread_mach_thread_np(pthread_self()),a[-1]);
     for(unsigned i=2;i<n;++i)objc_bridge32_pin_event(args[i],1);

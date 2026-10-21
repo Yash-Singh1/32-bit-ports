@@ -89,9 +89,14 @@ build/Gangstar-Converter.app/Contents/MacOS/GangstarConverter --convert SOURCE O
   display and its fullscreen window. In the borderless fullscreen window the
   loader fits the view to the window at the resolution's aspect ratio, on
   black, so smaller modes don't sit in a corner and larger ones (up to the
-  built-in panel's pixel size) aren't cropped. `transformMousePoint:` ignores
-  the view's x origin, so the loader subtracts it when the view is
-  pillarboxed. The resolution menu looks its saved resolution up among the
+  built-in panel's pixel size) aren't cropped. On a display with a camera
+  housing macOS moves a window covering the strip beside it down by the
+  strip's height (32pt on a 14"/16" MacBook Pro), cutting off the bottom of
+  the picture, so the loader first shrinks the window to the screen's safe
+  area. `transformMousePoint:` ignores the view's x origin, so the loader
+  subtracts it when the view is pillarboxed, and clamps points to the view
+  so the game's cursor can't leave the picture through the bars or the
+  notch strip. The resolution menu looks its saved resolution up among the
   display's modes and reads past its list when it is missing (a resolution
   saved on the built-in panel, then an external main display), so the saved
   resolution is offered as a mode of the current display.
