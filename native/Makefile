@@ -4,7 +4,7 @@ CONTINUE_WHEN_INACTIVE ?= 0
 
 # One loader serves every supported title; the bundle targets pick the title
 # with GAME=pirates (default), clonewars, marvel, saga, cod2, cod2mp, cod4, cod4mp,
-# mw2, mw2mp, mw3, mw3mp, gangstar or asphalt6.
+# mw2, mw2mp, mw3, mw3mp, gangstar, asphalt6 or fastfive.
 GAME ?= pirates
 ifneq ($(filter $(GAME),cod cod2 cod2mp cod4 cod4mp),)
 # Aspyr's Carbon-era ports share tools/bundle_cod4.py.
@@ -50,6 +50,15 @@ CG_SOURCE :=
 ICON_NAME := IconMacOSX.icns
 GUEST_RUNTIME_DIR ?= $(BUILD_DIR)/guest-runtime
 ASPHALT6_GL ?= apple
+else ifeq ($(GAME),fastfive)
+SOURCE_APP ?=
+BUNDLE := $(BUILD_DIR)/FastFive-Compat.app
+IMAGE_NAME := FastFive.image
+LOADER_NAME := FastFiveCompat
+CG_SOURCE :=
+ICON_NAME := IconMacOSX.icns
+GUEST_RUNTIME_DIR ?= $(BUILD_DIR)/guest-runtime
+FASTFIVE_GL ?= apple
 else ifeq ($(GAME),clonewars)
 BUNDLE := $(BUILD_DIR)/LEGOCloneWars-Compat.app
 SOURCE_APP := /Volumes/Storage/games/mac/lsw3/LEGOCloneWars.app
@@ -137,7 +146,7 @@ GAME_DATA := GAME.DAT GAME0.DAT GAME1.DAT GAME2.DAT GAME3.DAT GAME4.DAT
 ICON := icons/LEGOPirates.icns
 ICON_NAME := icon.icns
 else
-$(error Unknown GAME "$(GAME)"; choose pirates, clonewars, marvel, saga, cod2, cod2mp, cod4, cod4mp, mw2, mw2mp, mw3, mw3mp, gangstar or asphalt6)
+$(error Unknown GAME "$(GAME)"; choose pirates, clonewars, marvel, saga, cod2, cod2mp, cod4, cod4mp, mw2, mw2mp, mw3, mw3mp, gangstar, asphalt6 or fastfive)
 endif
 CG_SOURCE ?= $(SOURCE_CONTENTS)/Library/Frameworks/Cg.framework
 # Python for the Pirates unpacker.  By default a venv under $(BUILD_DIR) with
@@ -218,6 +227,26 @@ $(BUILD_DIR)/test_asphalt6_converter: $(COD4_CONVERTER_CORE) asphalt6-converter/
 .PHONY: test-asphalt6-converter
 test-asphalt6-converter: $(BUILD_DIR)/test_asphalt6_converter
 	./$(BUILD_DIR)/test_asphalt6_converter
+
+# Fast Five has its own source validation and converter app.
+FASTFIVE_CONVERTER_SOURCES := $(COD4_CONVERTER_CORE) fastfive-converter/FastFive.swift fastfive-converter/App.swift fastfive-converter/main.swift
+
+$(BUILD_DIR)/fastfive-converter-arm64: $(FASTFIVE_CONVERTER_SOURCES) | $(BUILD_DIR)
+	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -target arm64-apple-macosx11.0 -sdk $(SDK) $^ -o $@
+
+$(BUILD_DIR)/fastfive-converter-x86_64: $(FASTFIVE_CONVERTER_SOURCES) | $(BUILD_DIR)
+	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -target x86_64-apple-macosx11.0 -sdk $(SDK) $^ -o $@
+
+.PHONY: fastfive-converter
+fastfive-converter: glmetal-lib $(BUILD_DIR)/fastfive-converter-arm64 $(BUILD_DIR)/fastfive-converter-x86_64 $(BUILD_DIR)/game_loader fastfive-converter/Info.plist tools/package_fastfive_converter.py
+	python3 tools/package_fastfive_converter.py --build "$(BUILD_DIR)" --glmetal "$(GLMETAL_BUILD)"
+
+$(BUILD_DIR)/test_fastfive_converter: $(COD4_CONVERTER_CORE) fastfive-converter/FastFive.swift tests/test_fastfive_converter.swift | $(BUILD_DIR)
+	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -target $(shell uname -m)-apple-macosx11.0 -sdk $(SDK) $^ -o $@
+
+.PHONY: test-fastfive-converter
+test-fastfive-converter: $(BUILD_DIR)/test_fastfive_converter
+	./$(BUILD_DIR)/test_fastfive_converter
 
 $(BUILD_DIR)/test_cod4_converter: $(COD4_CONVERTER_CORE) tests/test_cod4_converter.swift | $(BUILD_DIR)
 	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -target $(shell uname -m)-apple-macosx11.0 -sdk $(SDK) $^ -o $@
@@ -375,6 +404,11 @@ bundle: $(BUILD_DIR)/game_loader glmetal-lib tools/bundle_asphalt6.py tools/pack
 	test -n "$(SOURCE_APP)" || { echo "pass SOURCE_APP=/path/to/Asphalt.6.zip (or the Mac app)" >&2; exit 1; }
 	test -f "$(GUEST_RUNTIME_DIR)/libstdc++.6.dylib" || $(MAKE) cod4-runtime
 	python3 tools/bundle_asphalt6.py --source "$(SOURCE_APP)" --loader "$(BUILD_DIR)/game_loader" --bundle "$(BUNDLE)" --runtime "$(GUEST_RUNTIME_DIR)" --glmetal "$(GLMETAL_BUILD)" $(if $(filter metal,$(ASPHALT6_GL)),--metal,--apple-gl)
+else ifeq ($(GAME),fastfive)
+bundle: $(BUILD_DIR)/game_loader glmetal-lib tools/bundle_fastfive.py tools/package_glmetal.py
+	test -n "$(SOURCE_APP)" || { echo "pass SOURCE_APP=/path/to/Fast_Five_1.0.zip (or the Mac app)" >&2; exit 1; }
+	test -f "$(GUEST_RUNTIME_DIR)/libstdc++.6.dylib" || $(MAKE) cod4-runtime
+	python3 tools/bundle_fastfive.py --source "$(SOURCE_APP)" --loader "$(BUILD_DIR)/game_loader" --bundle "$(BUNDLE)" --runtime "$(GUEST_RUNTIME_DIR)" --glmetal "$(GLMETAL_BUILD)" $(if $(filter metal,$(FASTFIVE_GL)),--metal,--apple-gl)
 else ifeq ($(GAME):$(SAGA_EDITION),saga:steam)
 bundle: $(BUILD_DIR)/game_loader $(INFO_PLIST) tools/bundle_saga_steam.py
 	python3 tools/bundle_saga_steam.py "$(SOURCE_APP)" "$(SAGA_DATA_SOURCE)" "$(BUILD_DIR)/game_loader" "$(BUNDLE)" "$(INFO_PLIST)"

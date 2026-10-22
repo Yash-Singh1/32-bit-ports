@@ -3092,6 +3092,14 @@ static bool background_test_mode(void)
 static void simulate_test_window_activation(NSWindow *window)
 {
     if (getenv("LP32_TEST_FOCUS_LOSS")) return;
+    /* Like AppKit, notify only when simulated focus changes. Fast Five's
+     * applicationDidBecomeActive: calls makeKeyAndOrderFront: again. */
+    static bool test_app_active;
+    static NSWindow *test_key_window; /* compared only, never messaged */
+    bool app_changed = !test_app_active, key_changed = test_key_window != window;
+    if (!app_changed && !key_changed) return;
+    test_app_active = true;
+    test_key_window = window;
     /* Games driven by activation notifications must see the same simulated
      * focus as isActive/isKeyWindow, without making the real window key. */
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -3102,7 +3110,7 @@ static void simulate_test_window_activation(NSWindow *window)
                                    "applicationDidBecomeActive:", "windowDidBecomeKey:"};
         for (unsigned i = 0; i < 3; ++i) {
             if (!targets[i] || (i == 1 && targets[1] == targets[0]) ||
-                !objc_legacy32_token(targets[i])) continue;
+                !objc_legacy32_token(targets[i]) || (i < 2 ? !app_changed : !key_changed)) continue;
             SEL selector = sel_registerName(selectors[i]);
             if (![targets[i] respondsToSelector:selector]) continue;
             NSNotification *notification = [NSNotification notificationWithName:

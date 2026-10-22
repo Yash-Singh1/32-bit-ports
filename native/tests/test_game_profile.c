@@ -135,6 +135,13 @@ int main(void)
     assert(lp32_profile() == asphalt);
     assert(lp32_profile_select(&gameloft, "/tmp/Gangstar.image") == 0);
     assert(lp32_profile() == gangstar);
+    const struct lp32_game_profile *fastfive = lp32_profile_named("fastfive");
+    assert(fastfive && fastfive != asphalt && fastfive->title == LP32_TITLE_FASTFIVE);
+    assert(fastfive->callee_pops_struct_return && fastfive->thread_argument_is_direct);
+    assert(!fastfive->code_patches && !fastfive->controller && !fastfive->steam_app_id);
+    assert(lp32_title_is_gameloft(fastfive->title));
+    assert(lp32_profile_select(&gameloft, "/tmp/FastFive.image") == 0);
+    assert(lp32_profile() == fastfive);
     struct macho_image32 empty = {0};
     assert(lp32_profile_select(&empty, NULL) == -1);
     assert(lp32_profile_named("codmw2") == lp32_profile_named("mw2"));

@@ -696,6 +696,18 @@ static const struct lp32_game_profile asphalt6_profile = {
     .thread_argument_is_direct = 1,
 };
 
+/* Fast Five 1.0.0 shares Asphalt 6's Gameloft Cocoa engine (EAGLView,
+   CustomWindow, GLSL). Its bundled SDL 1.2 is used only for joysticks. */
+static const struct lp32_game_profile fastfive_profile = {
+    .title = LP32_TITLE_FASTFIVE,
+    .name = "FastFive",
+    .display_name = "Fast Five",
+    .log_directory = "FastFiveCompat",
+    .image_file = "FastFive.image",
+    .callee_pops_struct_return = 1,
+    .thread_argument_is_direct = 1,
+};
+
 static const struct lp32_game_profile *const known_profiles[] = {
     &pirates_profile,
     &clone_wars_profile,
@@ -713,6 +725,7 @@ static const struct lp32_game_profile *const known_profiles[] = {
     &mw3_mp_profile,
     &gangstar_profile,
     &asphalt6_profile,
+    &fastfive_profile,
 };
 
 static const struct lp32_game_profile *current_profile = &unknown_profile;
@@ -915,6 +928,7 @@ int lp32_profile_select(const struct macho_image32 *image, const char *image_pat
         if (!strcmp(name, "MW3MP.image")) selected = &mw3_mp_profile;
         if (!strcmp(name, "Gangstar.image")) selected = &gangstar_profile;
         if (!strcmp(name, "Asphalt6.image")) selected = &asphalt6_profile;
+        if (!strcmp(name, "FastFive.image")) selected = &fastfive_profile;
         if (!strcmp(name, "COD4.image") || !strcmp(name, "COD4MP.image")) {
             /* Other Mac releases may place functions at different addresses.
                Retain title-level ABI handling, but never apply the tested

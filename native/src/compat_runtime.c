@@ -5779,6 +5779,11 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
         return (uint32_t)pthread_sigmask((int)arguments[0], (void *)(uintptr_t)arguments[1], (void *)(uintptr_t)arguments[2]);
     if (import_is(name, "_pthread_setcanceltype"))
         return (uint32_t)pthread_setcanceltype((int)arguments[0], (void *)(uintptr_t)arguments[1]);
+    /* _pthread_cancel cancels the host thread, so test the host request. */
+    if (import_is(name, "_pthread_testcancel")) {
+        pthread_testcancel();
+        return 0;
+    }
     if (import_is(name, "_signal")) {
         /* A 32-bit signal handler cannot be installed as a host function.
            Until asynchronous guest contexts/unwinding are supported, report
@@ -5993,6 +5998,8 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
     if (import_is(name, "_ceil")) return return_guest_double(ceil(guest_double(arguments)));
     if (import_is(name, "_floor")) return return_guest_double(floor(guest_double(arguments)));
     if (import_is(name, "_rint")) return return_guest_double(rint(guest_double(arguments)));
+    if (import_is(name, "_nearbyint")) return return_guest_double(nearbyint(guest_double(arguments)));
+    if (import_is(name, "_nearbyintf")) return return_guest_float(nearbyintf(guest_float(arguments[0])));
     if (import_is(name, "_ldexpf")) {
         return return_guest_float(ldexpf(guest_float(arguments[0]), (int)arguments[1]));
     }
@@ -6515,8 +6522,9 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
 #pragma clang diagnostic pop
         return digest ? arguments[2] : 0;
     }
-    if (import_is(name, "___cxa_pure_virtual") || import_is(name, "_abort") ||
-        import_is(name, "___assert_rtn")) {
+    /* GCC's default unexpected handler terminates, like a pure virtual call. */
+    if (import_is(name, "___cxa_pure_virtual") || import_is(name, "___cxa_call_unexpected") ||
+        import_is(name, "_abort") || import_is(name, "___assert_rtn")) {
         if (import_is(name, "___assert_rtn"))
             fprintf(stderr, "compat32: guest assertion failed: %s, function %s, file %s, line %d\n",
                     (const char *)(uintptr_t)arguments[3], (const char *)(uintptr_t)arguments[0],

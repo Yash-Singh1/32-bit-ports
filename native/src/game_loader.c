@@ -957,7 +957,7 @@ static void runtime_diagnostic_line(const char *line)
 static const char *default_image_path(const char *argv0, char *buffer,
                                       size_t size)
 {
-    static const char *const candidates[] = {"LEGOPirates", "LEGOCloneWars", "LEGOMarvel", "LEGOCompleteSaga", "COD4", "COD4MP", "COD2", "COD2MP", "MW2", "MW2MP", "MW3", "MW3MP", "Gangstar", "Asphalt6"};
+    static const char *const candidates[] = {"LEGOPirates", "LEGOCloneWars", "LEGOMarvel", "LEGOCompleteSaga", "COD4", "COD4MP", "COD2", "COD2MP", "MW2", "MW2MP", "MW3", "MW3MP", "Gangstar", "Asphalt6", "FastFive"};
     const char *slash = strrchr(argv0, '/');
     size_t directory_length = slash ? (size_t)(slash - argv0) : 0;
     for (size_t index = 0; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {

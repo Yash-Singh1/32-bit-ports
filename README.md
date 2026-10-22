@@ -37,6 +37,10 @@ archive or disk image. Download [Asphalt 6 Converter 0.0.0-dev.2](https://github
 See [native/ASPHALT6.md](native/ASPHALT6.md) for the
 current validation status and build instructions.
 
+Fast Five for Mac has its own experimental converter:
+`make -C native fastfive-converter`. It accepts the Mac app, its folder, ZIP
+archive or disk image. See [native/FASTFIVE.md](native/FASTFIVE.md).
+
 Support for the original 32-bit Mac releases:
 
 | Game | Mac release | Status |

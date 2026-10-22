@@ -1256,7 +1256,9 @@ static uint64_t shader_source(const uint32_t *a,uint32_t site) {
         }
         if (can_rewrite && !append_shader_bytes(&joined, &joined_len, &joined_cap, text, piece)) can_rewrite = 0;
     }
-    char *asphalt = can_rewrite && lp32_profile()->title==LP32_TITLE_ASPHALT6 ?
+    /* Asphalt 6 and Fast Five ship the same Glitch engine shader preamble. */
+    char *asphalt = can_rewrite && (lp32_profile()->title==LP32_TITLE_ASPHALT6 ||
+                                    lp32_profile()->title==LP32_TITLE_FASTFIVE) ?
         lp32_asphalt_rewrite_glsl(joined,joined_len):NULL;
     const char *effective=asphalt?asphalt:joined;
     size_t effective_len=asphalt?strlen(asphalt):joined_len;

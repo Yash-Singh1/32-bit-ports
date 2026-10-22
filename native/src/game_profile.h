@@ -31,12 +31,14 @@ enum lp32_title {
     LP32_TITLE_COD2_MP,
     LP32_TITLE_GANGSTAR,
     LP32_TITLE_ASPHALT6,
+    LP32_TITLE_FASTFIVE,
 };
 
 /* Gameloft's Cocoa ports use EAGLView and Apple's i386 libstdc++ ABI. */
 static inline int lp32_title_is_gameloft(enum lp32_title title)
 {
-    return title == LP32_TITLE_GANGSTAR || title == LP32_TITLE_ASPHALT6;
+    return title == LP32_TITLE_GANGSTAR || title == LP32_TITLE_ASPHALT6 ||
+           title == LP32_TITLE_FASTFIVE;
 }
 
 /* Aspyr's Carbon/AGL ports of COD2 and COD4 share one Mac engine layer

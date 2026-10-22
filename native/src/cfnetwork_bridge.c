@@ -57,6 +57,13 @@ static void timer_callback(CFRunLoopTimerRef timer, void *raw) {
   uint32_t args[] = {objc_bridge32_guest_object((void *)timer), context->info};
   compat_runtime32_call(context->callback, args, 2);
 }
+static void reachability_callback(SCNetworkReachabilityRef target,
+                                  SCNetworkReachabilityFlags flags, void *raw) {
+  const struct callback32 *context = raw;
+  uint32_t args[] = {objc_bridge32_guest_object((void *)target), flags,
+                     context->info};
+  compat_runtime32_call(context->callback, args, 3);
+}
 static uint32_t copied(CFTypeRef value) {
   uint32_t token = objc_bridge32_guest_object((void *)value);
   if (value)
@@ -213,6 +220,31 @@ int cfnetwork_bridge32_dispatch(const char *name, const uint32_t *a,
   } else if (IS("_CFRunLoopRunInMode")) {
     double seconds; memcpy(&seconds, a+1, 8);
     *out = CFRunLoopRunInMode(O(0), seconds, a[3] != 0);
+  } else if (IS("_SCNetworkReachabilitySetCallback")) {
+    /* SCNetworkReachabilityContext has the same five-word i386 layout. */
+    const uint32_t *guest = P(2);
+    if (!O(0) || (guest && guest[0])) {
+      *out = 0;
+      return 1;
+    }
+    if (!a[1]) {
+      *out = SCNetworkReachabilitySetCallback(O(0), NULL, NULL);
+      return 1;
+    }
+    struct callback32 callback = {0, 0, 0, 0, a[1]};
+    if (guest) {
+      callback.info = guest[1];
+      callback.retain = guest[2];
+      callback.release = guest[3];
+      callback.describe = guest[4];
+    }
+    SCNetworkReachabilityContext context = {0, &callback, retain_context,
+                                            release_context, describe_context};
+    *out = SCNetworkReachabilitySetCallback(O(0), reachability_callback, &context);
+  } else if (IS("_SCNetworkReachabilityScheduleWithRunLoop")) {
+    *out = O(0) && O(1) && SCNetworkReachabilityScheduleWithRunLoop(O(0), O(1), O(2));
+  } else if (IS("_SCNetworkReachabilityUnscheduleFromRunLoop")) {
+    *out = O(0) && O(1) && SCNetworkReachabilityUnscheduleFromRunLoop(O(0), O(1), O(2));
   } else if (IS("_CFRunLoopTimerCreate")) {
     double date, interval;
     memcpy(&date, a + 1, 8);
