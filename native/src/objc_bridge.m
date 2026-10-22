@@ -7635,6 +7635,31 @@ static void repair_bound_texture_mipmap_range(GLenum upload_target)
     }
 }
 
+/* GenerateMipmap stops at TEXTURE_MAX_LEVEL. The temporary sampling clamp
+   must not limit which images the guest asks GL to create. Restore only our
+   own clamp, preserving an explicit maximum the guest has since supplied. */
+static void restore_mipmap_range_for_generation(GLenum target)
+{
+    if ((target != GL_TEXTURE_2D && target != GL_TEXTURE_CUBE_MAP) ||
+        mipmap_repair_disabled()) return;
+    GLint texture = 0;
+    GLint maximum = 0;
+    glGetIntegerv(target == GL_TEXTURE_2D ? GL_TEXTURE_BINDING_2D :
+                  GL_TEXTURE_BINDING_CUBE_MAP, &texture);
+    if (texture <= 0) return;
+    glGetTexParameteriv(target, GL_TEXTURE_MAX_LEVEL, &maximum);
+    CGLContextObj context = CGLGetCurrentContext();
+    CGLShareGroupObj share_group = context ? CGLGetShareGroup(context) : NULL;
+    pthread_mutex_lock(&mipmap_repair_mutex);
+    const struct mipmap_repair_entry *entry = mipmap_repair_entry_for(
+        share_group, target, (GLuint)texture, false);
+    bool restore = entry && entry->clamped &&
+        maximum == entry->compatibility_maximum;
+    GLint requested = restore ? entry->requested_maximum : maximum;
+    pthread_mutex_unlock(&mipmap_repair_mutex);
+    if (restore) glTexParameteri(target, GL_TEXTURE_MAX_LEVEL, requested);
+}
+
 /* A bounded upload-order log, independent of expensive per-draw tracing. */
 static void trace_mip_upload(GLenum target, GLint level, GLenum internal,
                              GLsizei width, GLsizei height)
@@ -10770,8 +10795,11 @@ static int objc_bridge32_dispatch_body(const char *import_name,
     }
     if (LP32_NAME_IS(import_name, import_length, "glGenerateMipmap") ||
         LP32_NAME_IS(import_name, import_length, "glGenerateMipmapEXT")) {
+        restore_mipmap_range_for_generation(arguments[0]);
         note_texture_level_change();
-        glGenerateMipmap(arguments[0]); *result = 0; return 1;
+        glGenerateMipmap(arguments[0]);
+        repair_bound_texture_mipmap_range(arguments[0]);
+        *result = 0; return 1;
     }
     if (LP32_NAME_IS(import_name, import_length, "glEnableIndexedEXT")) {
         glEnableIndexedEXT(arguments[0], arguments[1]);
@@ -14293,6 +14321,94 @@ cleanup_3d:
     return status;
 }
 
+/* A base-only upload can be temporarily clamped by the compatibility repair.
+   Generation must still create the guest's requested levels, so later streamed
+   subimage updates have storage to write into. */
+static int run_generated_mipmap_case(GLenum target, GLint base, GLint maximum,
+                                     const char *generate_name)
+{
+    uint32_t pixels = compat_runtime32_allocate(8 * 8 * 4, 1);
+    if (!pixels) return -1;
+    unsigned char *bytes = (void *)(uintptr_t)pixels;
+    for (size_t i = 0; i < 8 * 8; ++i) {
+        bytes[i * 4] = 32;
+        bytes[i * 4 + 1] = 96;
+        bytes[i * 4 + 2] = 224;
+        bytes[i * 4 + 3] = 255;
+    }
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(target, texture);
+    glTexParameteri(target, GL_TEXTURE_BASE_LEVEL, base);
+    glTexParameteri(target, GL_TEXTURE_MAX_LEVEL, maximum);
+    unsigned faces = target == GL_TEXTURE_CUBE_MAP ? 6 : 1;
+    int status = 0;
+    uint64_t result = 0;
+    for (unsigned face = 0; face < faces; ++face) {
+        GLenum image = faces == 6 ? GL_TEXTURE_CUBE_MAP_POSITIVE_X + face : target;
+        uint32_t upload[] = {image, (uint32_t)base, GL_RGBA8, 8, 8, 0,
+                             GL_RGBA, GL_UNSIGNED_BYTE, pixels};
+        if (!objc_bridge32_dispatch("glTexImage2D", upload, &result)) status = -1;
+    }
+    GLint observed = -1;
+    glGetTexParameteriv(target, GL_TEXTURE_MAX_LEVEL, &observed);
+    if (observed != base) {
+        fprintf(stderr, "gl-texture-selftest: base-only texture was not clamped "
+                "target=%04x max=%d expected=%d\n", target, observed, base);
+        status = -1;
+    }
+    uint32_t generate[] = {target};
+    if (!objc_bridge32_dispatch(generate_name, generate, &result)) status = -1;
+    glGetTexParameteriv(target, GL_TEXTURE_MAX_LEVEL, &observed);
+    if (observed != maximum) status = -1;
+    GLint last = maximum < base + 3 ? maximum : base + 3;
+    for (unsigned face = 0; face < faces; ++face) {
+        GLenum image = faces == 6 ? GL_TEXTURE_CUBE_MAP_POSITIVE_X + face : target;
+        for (GLint level = base; level <= last; ++level) {
+            GLint width = 0;
+            GLsizei size = 8 >> (level - base);
+            glGetTexLevelParameteriv(image, level, GL_TEXTURE_WIDTH, &width);
+            if (width != size) {
+                fprintf(stderr, "gl-texture-selftest: generated mip missing "
+                        "target=%04x face=%u level=%d width=%d expected=%d\n",
+                        target, face, level, width, size);
+                status = -1;
+                continue;
+            }
+            unsigned char actual[8 * 8 * 4];
+            glGetTexImage(image, level, GL_RGBA, GL_UNSIGNED_BYTE, actual);
+            for (GLsizei i = 0; i < size * size; ++i) {
+                if (memcmp(actual + i * 4, bytes, 4)) {
+                    fprintf(stderr, "gl-texture-selftest: generated pixel mismatch "
+                            "face=%u level=%d pixel={%u,%u,%u,%u}\n", face, level,
+                            actual[i*4], actual[i*4+1], actual[i*4+2], actual[i*4+3]);
+                    status = -1;
+                    break;
+                }
+            }
+            uint32_t update[] = {image, (uint32_t)level, 0, 0,
+                                 (uint32_t)size, (uint32_t)size,
+                                 GL_RGBA, GL_UNSIGNED_BYTE, pixels};
+            if (!objc_bridge32_dispatch("glTexSubImage2D", update, &result)) status = -1;
+        }
+        GLint width = -1;
+        glGetTexLevelParameteriv(image, last + 1, GL_TEXTURE_WIDTH, &width);
+        if (width != 0) status = -1;
+    }
+    GLenum error = glGetError();
+    if (error != GL_NO_ERROR) {
+        fprintf(stderr, "gl-texture-selftest: generated mip error=%04x\n", error);
+        status = -1;
+    }
+    if (status) fprintf(stderr, "gl-texture-selftest: mip generation failed "
+                        "target=%04x base=%d requestedMax=%d observedMax=%d\n",
+                        target, base, maximum, observed);
+    forget_mipmap_repairs(1, &texture);
+    glDeleteTextures(1, &texture);
+    compat_runtime32_deallocate(pixels);
+    return status;
+}
+
 int objc_bridge32_run_gl_texture_self_test(void)
 {
 #pragma clang diagnostic push
@@ -14482,6 +14598,11 @@ int objc_bridge32_run_gl_texture_self_test(void)
         }
     }
 
+    if (status == 0) status = run_generated_mipmap_case(GL_TEXTURE_2D, 0, 1000, "glGenerateMipmapEXT");
+    if (status == 0) status = run_generated_mipmap_case(GL_TEXTURE_2D, 0, 2, "glGenerateMipmap");
+    if (status == 0) status = run_generated_mipmap_case(GL_TEXTURE_2D, 0, 0, "glGenerateMipmapEXT");
+    if (status == 0) status = run_generated_mipmap_case(GL_TEXTURE_CUBE_MAP, 0, 1000, "glGenerateMipmapEXT");
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     CGLSetCurrentContext(NULL);
@@ -14492,7 +14613,8 @@ int objc_bridge32_run_gl_texture_self_test(void)
         puts("gl-texture-selftest: PASS (DXT1/DXT5 direct and sliced "
              "uploads survive shared contexts and texture-name reuse; "
              "3D image/subimage dispatch works; incomplete 2D/cubemap "
-             "ranges are clamped and restored)");
+             "ranges are clamped and restored; mip generation preserves "
+             "requested ranges and streamed updates)");
     }
     return status;
 }

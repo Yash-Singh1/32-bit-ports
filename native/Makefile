@@ -691,6 +691,10 @@ $(BUILD_DIR)/test_carbon_fullscreen: tests/test_carbon_fullscreen.m src/carbon_u
 test-carbon-fullscreen: $(BUILD_DIR)/test_carbon_fullscreen
 	arch -x86_64 ./$(BUILD_DIR)/test_carbon_fullscreen
 
+.PHONY: test-gl-texture
+test-gl-texture: $(BUILD_DIR)/game_loader
+	env LP32_GL_TEXTURE_SELFTEST=1 LP32_MUTE_AUDIO=1 LP32_BACKGROUND_TEST=1 LP32_NO_DIAGNOSTIC_LOG=1 arch -x86_64 ./$(BUILD_DIR)/game_loader "$(BUNDLE)/Contents/SharedSupport/$(IMAGE_NAME)"
+
 .PHONY: test-gl-buffer
 test-gl-buffer: $(BUILD_DIR)/game_loader
 	env LP32_GL_BUFFER_SELFTEST=1 LP32_MUTE_AUDIO=1 LP32_BACKGROUND_TEST=1 LP32_NO_DIAGNOSTIC_LOG=1 arch -x86_64 ./$(BUILD_DIR)/game_loader "$(BUNDLE)/Contents/SharedSupport/$(IMAGE_NAME)"
