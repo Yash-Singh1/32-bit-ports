@@ -1656,6 +1656,51 @@ static void gangstar_test_resolution_change(void)
    On a display with a camera housing macOS moves a window that covers the
    strip beside it down by the strip's height, pushing the bottom of the
    picture off screen, so the window is first shrunk to the safe area. */
+static NSRect gangstar_safe_window_frame(NSWindow *window, NSRect frame)
+{
+    if (@available(macOS 12.0, *)) {
+        NSScreen *screen = window.screen;
+        for (NSScreen *candidate in NSScreen.screens)
+            if (NSPointInRect(NSMakePoint(NSMidX(frame), NSMidY(frame)), candidate.frame)) screen = candidate;
+        if (!screen) return frame;
+        NSEdgeInsets insets = screen.safeAreaInsets;
+        NSRect safe = screen.frame;
+        safe.origin.x += insets.left;
+        safe.origin.y += insets.bottom;
+        safe.size.width -= insets.left + insets.right;
+        safe.size.height -= insets.top + insets.bottom;
+        if (!NSEqualRects(frame, safe) && NSContainsRect(frame, safe)) {
+            if (getenv("LP32_TRACE_DISPLAY"))
+                fprintf(stderr, "compat32: fullscreen window fitted to safe area %s\n",
+                        NSStringFromRect(safe).UTF8String);
+            return safe;
+        }
+    }
+    return frame;
+}
+
+/* The game sizes its borderless fullscreen window before its GL view is in
+   it (the intro movie plays in that window), so the safe area is applied
+   to the window frame itself as well. */
+static bool gangstar_fit_fullscreen_window(id receiver, const char *selector, const uint32_t *arguments)
+{
+    if (lp32_profile()->title != LP32_TITLE_GANGSTAR ||
+        (strcmp(selector, "setFrame:display:") && strcmp(selector, "center")) ||
+        ![receiver isKindOfClass:[NSWindow class]] ||
+        ([(NSWindow *)receiver styleMask] & NSWindowStyleMaskTitled))
+        return false;
+    /* It then centres the window, which would move a safe-area window off
+       its frame (onto the main display, or up into the camera strip). */
+    if (!strcmp(selector, "center")) return true;
+    float rect[4];
+    memcpy(rect, arguments + 2, sizeof rect);
+    NSRect frame = NSMakeRect(rect[0], rect[1], rect[2], rect[3]);
+    NSRect safe = gangstar_safe_window_frame(receiver, frame);
+    if (NSEqualRects(safe, frame)) return false;
+    [(NSWindow *)receiver setFrame:safe display:arguments[6] != 0];
+    return true;
+}
+
 static bool gangstar_fit_fullscreen_view(id receiver, const char *selector, const uint32_t *arguments)
 {
     if (lp32_profile()->title != LP32_TITLE_GANGSTAR || strcmp(selector, "setFrame:") ||
@@ -1667,21 +1712,8 @@ static bool gangstar_fit_fullscreen_view(id receiver, const char *selector, cons
     if (!window || (window.styleMask & NSWindowStyleMaskTitled)) return false;
     float requested[4];
     memcpy(requested, arguments + 2, sizeof requested);
-    NSScreen *screen = window.screen;
-    if (@available(macOS 12.0, *)) if (screen) {
-        NSEdgeInsets insets = screen.safeAreaInsets;
-        NSRect safe = screen.frame;
-        safe.origin.x += insets.left;
-        safe.origin.y += insets.bottom;
-        safe.size.width -= insets.left + insets.right;
-        safe.size.height -= insets.top + insets.bottom;
-        if (!NSEqualRects(window.frame, safe) && NSContainsRect(window.frame, safe)) {
-            [window setFrame:safe display:NO];
-            if (getenv("LP32_TRACE_DISPLAY"))
-                fprintf(stderr, "compat32: fullscreen window fitted to safe area %s\n",
-                        NSStringFromRect(safe).UTF8String);
-        }
-    }
+    NSRect safe = gangstar_safe_window_frame(window, window.frame);
+    if (!NSEqualRects(safe, window.frame)) [window setFrame:safe display:NO];
     NSSize area = [window contentRectForFrameRect:window.frame].size;
     if (requested[2] <= 0 || requested[3] <= 0 || area.width <= 0 || area.height <= 0) return false;
     CGFloat scale = fmin(area.width / requested[2], area.height / requested[3]);
@@ -12178,7 +12210,8 @@ static int objc_bridge32_dispatch_body(const char *import_name,
             return handled;
         }
         if (handle_test_activation(receiver, selector_name, result)) return 1;
-        if (selector_name && gangstar_fit_fullscreen_view(receiver, selector_name, arguments)) {
+        if (selector_name && (gangstar_fit_fullscreen_window(receiver, selector_name, arguments) ||
+                              gangstar_fit_fullscreen_view(receiver, selector_name, arguments))) {
             *result = 0;
             return 1;
         }

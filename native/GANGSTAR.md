@@ -92,8 +92,9 @@ build/Gangstar-Converter.app/Contents/MacOS/GangstarConverter --convert SOURCE O
   built-in panel's pixel size) aren't cropped. On a display with a camera
   housing macOS moves a window covering the strip beside it down by the
   strip's height (32pt on a 14"/16" MacBook Pro), cutting off the bottom of
-  the picture, so the loader first shrinks the window to the screen's safe
-  area. `transformMousePoint:` ignores the view's x origin, so the loader
+  the picture, so the loader shrinks the borderless window to the screen's
+  safe area when the game sets its frame (before the intro movie plays in
+  it) and ignores the game's `center` on it. `transformMousePoint:` ignores the view's x origin, so the loader
   subtracts it when the view is pillarboxed, and clamps points to the view
   so the game's cursor can't leave the picture through the bars or the
   notch strip. The resolution menu looks its saved resolution up among the

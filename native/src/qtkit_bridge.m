@@ -133,6 +133,14 @@ static bool trace(void)
     _playerLayer.player = [movie isKindOfClass:[LP32QTMovie class]] ? movie.player : nil;
 }
 - (BOOL)isOpaque { return YES; }
+- (void)viewDidMoveToWindow
+{
+    [super viewDidMoveToWindow];
+    if (trace() && self.window)
+        fprintf(stderr, "compat32: QTMovieView %p frame %s in window %s on screen %s\n", (void *)self,
+                NSStringFromRect(self.frame).UTF8String, NSStringFromRect(self.window.frame).UTF8String,
+                NSStringFromRect(self.window.screen.frame).UTF8String);
+}
 - (void)setControllerVisible:(BOOL)visible { (void)visible; }
 - (BOOL)isControllerVisible { return NO; }
 - (void)setEditable:(BOOL)editable { (void)editable; }
