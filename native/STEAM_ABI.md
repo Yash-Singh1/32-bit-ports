@@ -31,6 +31,14 @@ import in `client.dylib`'s `png_create_read_struct_2`.
 - All zlib imports used by the supplied game, including guest allocation
   callbacks needed by its PNG decoder. Native zlib's wider stream record and
   opaque state are never exposed to guest code.
+- Public Steam Timeline 001 methods, appended without changing existing
+  generated ordinals.
+- Server-list requests, scalar controls and their three-method C++ response
+  objects. Typed guest handles retain full native pointer identity, filters
+  use widened pointer cells with retained inline records, and callback
+  lifetimes distinguish cancellation from release. Release invalidates the
+  guest identity immediately and defers native destruction until in-flight
+  calls finish.
 
 ## Verification
 
@@ -40,6 +48,10 @@ at `-O0` and `-O2`. It exercises all three controller interfaces through
 thousands of calls, native-thread callbacks, nested struct returns, guarded
 filename outputs above 4 GB, reused native strings, failed/null outputs,
 more than 1,024 distinct names, Workshop tag arrays, IP and beacon records.
+Server-list fixtures cover all six creation methods, null requests, full-width
+native handles, filters, native-thread/nested callbacks, cancellation,
+deferred release and guest buffers crossing the 4 GB boundary. These are ABI
+checks against a mock client; they do not establish online browsing or play.
 The zlib fixture checks guarded 56-byte streams, incremental inflation,
 deflation, checksums, resets, invalid data/version/size, allocator failures,
 callback re-entry, and balanced guest allocation/free counts.
@@ -68,18 +80,18 @@ The reported relayed-client authentication failure is not fixed by ABI tracing
 or by the table overrides. `test-portal2-coop` checks callback payloads and
 delivery against a mock client, including all denial reasons 0–14.
 
-The audit covers the generated 983 method entries; it is not a claim that
-every Steamworks feature is implemented. There are still 46 entries with
-explicitly unsupported types/handles. They fail with a named diagnostic
+The audit covers the generated 987 method entries; it is not a claim that
+every Steamworks feature is implemented. Some entries still have
+explicitly unsupported types or handles. They fail with a named diagnostic
 instead of passing incompatible pointers to native Steam:
 
 | Area | Remaining contracts |
 | --- | --- |
-| Server browser (16 methods) | Native request handles, server-item pointers, filter pointer arrays, and C++ response objects |
+| Server browser | Server-item borrowed records and direct ping/player/rules response objects |
 | Modern networking messages/sockets (16 methods) | Message ownership/release callbacks, configuration unions, relay tickets, custom signaling, and fake UDP objects |
 | Networking utilities (4 methods) | Message allocation, debug callbacks, and typed configuration values |
 | HTML (1 method) | File-dialog response pointer array; pointer-bearing HTML callback payloads also require conversion |
-| Private/deprecated interfaces (9 methods) | Legacy PS3, post-result callbacks, and deprecated game-server heartbeat slots |
+| Private/deprecated interfaces | Legacy PS3 and post-result callbacks; only separately verified private method signatures are enabled |
 
 Generic callback delivery remains limited to records proven pointer-free by
 the SDK metadata. Full online play, Workshop workflows, and a full controller

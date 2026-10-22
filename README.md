@@ -21,8 +21,33 @@ Supported and candidate games:
 | LEGO Batman 3: Beyond Gotham | Feral, 2014 | - |
 | The LEGO Movie Videogame | Feral, 2014 | - |
 | Portal 2 | Valve, 2011 | Experimental: main menu and first level render; gameplay checks ongoing |
+| Left 4 Dead 2 | Valve, 2010 | Experimental: loader, bundle and movie playback; gameplay checks ongoing |
 
 \* Not verified with a 100% run yet, report any bugs or problems in the issues tab.
+
+## Left 4 Dead 2
+
+L4D2 support uses the original **Mac** game files and the installed Steam client.
+From `native/`, build a separate compatibility app with:
+
+```sh
+make GAME=l4d2 SOURCE_GAME="$HOME/Library/Application Support/Steam/steamapps/common/Left 4 Dead 2" bundle
+```
+
+The default `SOURCE_GAME` is that Steam installation, so `make GAME=l4d2 bundle`
+also works there. Use a complete installed or assembled Mac game folder; the
+L4D2 helper does not combine separate depot downloads. The Portal 2 GUI converter
+continues to convert Portal 2 only. Open `native/build/L4D2-Compat.app` from Finder,
+or use `make GAME=l4d2 run-game`. The original files are only read.
+
+The initial validation goal is sustained offline campaign play with bots,
+graphics, audio, keyboard/mouse input, map transitions, and settings retained
+after relaunch and rebuild. Online multiplayer, voice chat, controllers, and
+Workshop compatibility are not established by loader or bundle tests.
+The QuickTime shim uses AVFoundation for the Mac build's supplied movies;
+startup intro video and audio have been confirmed in the game window.
+Build requirements, diagnostic launches, and test instructions are in
+[native/L4D2.md](native/L4D2.md).
 
 ## Portal 2 converter
 

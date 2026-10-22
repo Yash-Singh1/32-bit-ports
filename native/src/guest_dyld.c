@@ -6,6 +6,7 @@
 #include "compat_runtime.h"
 #include "objc_bridge.h"
 #include "game_profile.h"
+#include "quicktime_support.h"
 
 #include <ctype.h>
 #include <dlfcn.h>
@@ -270,8 +271,11 @@ int guest_dyld32_initialize(const char *image_path)
     *slash = 0;
     char *support = strrchr(path, '/');
     if (support && !strcmp(support, "/SharedSupport")) {
-        if (strlen(path) + sizeof("/Portal2") > sizeof(path)) return fail("game path is too long");
-        strcat(path, "/Portal2");
+        const char *directory = lp32_profile()->source_data_directory;
+        if (!directory || !directory[0]) return fail("missing Source data directory in game profile");
+        size_t length = strlen(path);
+        int n = snprintf(path + length, sizeof(path) - length, "/%s", directory);
+        if (n < 0 || (size_t)n >= sizeof(path) - length) return fail("game path is too long");
     }
     if (!realpath(path, game_root)) return fail("game directory: %s", strerror(errno));
     char launcher[PATH_MAX];
@@ -933,7 +937,10 @@ uint32_t guest_dyld32_open(const char *name, int flags)
     pthread_mutex_lock(&loader_lock);
     error_pending = false;
     uint32_t result = 0;
-    if (name && system_path(name)) {
+    if (lp32_profile()->title == LP32_TITLE_L4D2 &&
+        (result = quicktime_support32_open(name))) {
+        /* Native AVFoundation backs this scoped obsolete framework surface. */
+    } else if (name && system_path(name)) {
         unsigned i;
         for (i = 0; i < host_module_count; ++i) if (!strcmp(host_modules[i].path, name)) break;
         if (i < host_module_count) result = HOST_HANDLE_BASE + i + 1;
@@ -968,6 +975,10 @@ uint32_t guest_dyld32_symbol(uint32_t handle, const char *symbol)
     } else if (handle == LP32_STEAM_CLIENT_HANDLE) {
         result = steam_bridge32_symbol(symbol);
         if (!result) fail("native Steam symbol %s is unavailable", symbol);
+    } else if (handle == LP32_QUICKTIME_FRAMEWORK_HANDLE &&
+               lp32_profile()->title == LP32_TITLE_L4D2) {
+        result = quicktime_support32_symbol(handle, symbol);
+        if (!result) fail("QuickTime compatibility symbol %s is unavailable", symbol);
     } else if (handle == HANDLE_BASE || handle == (uint32_t)(uintptr_t)RTLD_DEFAULT) {
         result = global_symbol(name);
         if (!result && dlsym(RTLD_DEFAULT, symbol)) result = compat_runtime32_resolve_symbol(name, false);
@@ -992,6 +1003,7 @@ uint32_t guest_dyld32_symbol(uint32_t handle, const char *symbol)
 int guest_dyld32_close(uint32_t handle)
 {
     if (handle == LP32_STEAM_CLIENT_HANDLE) return 0;
+    if (handle == LP32_QUICKTIME_FRAMEWORK_HANDLE && lp32_profile()->title == LP32_TITLE_L4D2) return 0;
     if (handle > HOST_HANDLE_BASE && handle - HOST_HANDLE_BASE <= host_module_count) return 0;
     if (handle < HANDLE_BASE || handle - HANDLE_BASE > module_count) return fail("invalid dlclose handle");
     return 0;

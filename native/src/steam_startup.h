@@ -1,6 +1,10 @@
 #ifndef LP32_STEAM_STARTUP_H
 #define LP32_STEAM_STARTUP_H
 #include <stdbool.h>
+#include <stdint.h>
+
+/* Finder and the isolated readiness probe must use the same owned game. */
+bool steam_startup_set_app_id(uint32_t app_id);
 
 struct steam_startup_ops {
     void *context;

@@ -1,4 +1,16 @@
 #include "steam_startup.h"
+#include <inttypes.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+bool steam_startup_set_app_id(uint32_t app_id)
+{
+    if (!app_id) return false;
+    char identity[11];
+    snprintf(identity, sizeof(identity), "%" PRIu32, app_id);
+    return setenv("SteamAppId", identity, 1) == 0 &&
+        setenv("SteamGameId", identity, 1) == 0;
+}
 
 static bool ready(const struct steam_startup_ops *ops)
 {

@@ -14,11 +14,12 @@ int objc_bridge32_register_legacy_module(uint32_t address, uint32_t size);
 void *objc_bridge32_host_object(uint32_t handle);
 uint32_t objc_bridge32_guest_object(void *object);
 int objc_bridge32_run_proxy_self_test(void);
+int objc_bridge32_run_hi_mouse_self_test(void);
 int objc_bridge32_run_gl_parameter_self_test(void);
 int objc_bridge32_run_gl_buffer_self_test(void);
 int objc_bridge32_run_gl_texture_self_test(void);
 /* Native helper UI; invoke before initializing or entering the guest. */
-void objc_bridge32_show_steam_required(void);
-int objc_bridge32_prepare_steam(const char *game_root);
+void objc_bridge32_show_steam_required(const char *profile_name);
+int objc_bridge32_prepare_steam(const char *game_root, const char *profile_name);
 
 #endif

@@ -1,5 +1,39 @@
 import Foundation
 
+// Overlay complete trees without writing through a link supplied by an earlier
+// tree. Used by both Make helpers and the existing Portal converter.
+func copySourceGameRoots(_ roots: [URL], to destination: URL,
+                         materializeLinks: Bool = false,
+                         check: () throws -> Void = {}) throws {
+    let fm = FileManager.default
+    func copy(_ source: URL, _ target: URL, ancestors: Set<String> = []) throws {
+        try check()
+        if source.lastPathComponent == ".DepotDownloader" { return }
+        let old = try? fm.attributesOfItem(atPath: target.path)
+        var copiedSource = source
+        var attributes = try fm.attributesOfItem(atPath: source.path)
+        if materializeLinks && attributes[.type] as? FileAttributeType == .typeSymbolicLink {
+            copiedSource = source.resolvingSymlinksInPath()
+            attributes = try fm.attributesOfItem(atPath: copiedSource.path)
+        }
+        if attributes[.type] as? FileAttributeType == .typeDirectory {
+            let canonical = copiedSource.resolvingSymlinksInPath().path
+            guard !ancestors.contains(canonical) else {
+                throw ConversionError.message("The game files contain a recursive directory link: \(source.path)")
+            }
+            if let old, old[.type] as? FileAttributeType != .typeDirectory { try fm.removeItem(at: target) }
+            try fm.createDirectory(at: target, withIntermediateDirectories: true)
+            for item in try fm.contentsOfDirectory(at: copiedSource, includingPropertiesForKeys: nil) {
+                try copy(item, target.appendingPathComponent(item.lastPathComponent), ancestors: ancestors.union([canonical]))
+            }
+        } else {
+            if old != nil { try fm.removeItem(at: target) }
+            try fm.copyItem(at: copiedSource, to: target)
+        }
+    }
+    for root in roots { try copy(root, destination) }
+}
+
 // Shared by the GUI converter and Makefile. Depot downloads are overlaid into
 // one private game root; no links back to the user's download are introduced.
 struct Portal2Source {
@@ -78,25 +112,6 @@ struct Portal2Source {
     }
 
     func copyGame(to destination: URL, check: () throws -> Void = {}) throws {
-        let fm = FileManager.default
-        func copy(_ source: URL, _ target: URL) throws {
-            try check()
-            if source.lastPathComponent == ".DepotDownloader" { return }
-            let old = try? fm.attributesOfItem(atPath: target.path)
-            let attributes = try fm.attributesOfItem(atPath: source.path)
-            if attributes[.type] as? FileAttributeType == .typeDirectory {
-                if let old, old[.type] as? FileAttributeType != .typeDirectory { try fm.removeItem(at: target) }
-                try fm.createDirectory(at: target, withIntermediateDirectories: true)
-                for item in try fm.contentsOfDirectory(at: source, includingPropertiesForKeys: nil) {
-                    try copy(item, target.appendingPathComponent(item.lastPathComponent))
-                }
-            } else {
-                // Replace links themselves, never write through a copied link
-                // when a later depot supplies the same path.
-                if old != nil { try fm.removeItem(at: target) }
-                try fm.copyItem(at: source, to: target)
-            }
-        }
-        for root in roots { try copy(root, destination) }
+        try copySourceGameRoots(roots, to: destination, check: check)
     }
 }

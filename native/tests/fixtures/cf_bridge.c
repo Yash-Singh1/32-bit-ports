@@ -15,6 +15,10 @@ extern CFReadStreamRef CFReadStreamCreate(CFAllocatorRef,
 extern void CFReadStreamSignalEvent(CFReadStreamRef, CFStreamEventType,
                                     const void *);
 
+struct nil_rect { float x, y, width, height; };
+extern struct nil_rect nil_rect_return(void *, const char *)
+    __asm__("_objc_msgSend_stret");
+
 static Boolean stream_open(CFReadStreamRef stream, CFStreamError *error,
                            Boolean *complete, void *info)
 {
@@ -47,6 +51,21 @@ static void count_value(const void *value, void *context)
 
 int check_cf_bridge(void)
 {
+    /* Exercise the fourth hidden-result import with an actual i386 caller.
+       A nil receiver needs no AppKit object or UI; guards and ESP verify the
+       destination width and the callee's hidden-pointer stack cleanup. */
+    for (unsigned repeat = 0; repeat < 32; ++repeat) {
+        struct { uint32_t before; struct nil_rect value; uint32_t after; } guarded = {
+            .before = 0x11223344, .value = {1, 2, 3, 4}, .after = 0xaabbccdd
+        };
+        uintptr_t before, after;
+        __asm__ volatile("movl %%esp,%0" : "=r"(before));
+        guarded.value = nil_rect_return(NULL, "frame");
+        __asm__ volatile("movl %%esp,%0" : "=r"(after));
+        if (before != after || guarded.before != 0x11223344 || guarded.after != 0xaabbccdd ||
+            guarded.value.x || guarded.value.y || guarded.value.width || guarded.value.height)
+            return -124;
+    }
     CFStringRef left = CFStringCreateWithCString(NULL, "portal", kCFStringEncodingUTF8);
     CFStringRef right = CFStringCreateWithCString(NULL, "portal", kCFStringEncodingUTF8);
     if (!left || !right || !CFEqual(left, right)) return -101;

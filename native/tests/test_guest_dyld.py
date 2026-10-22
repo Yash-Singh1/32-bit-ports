@@ -9,7 +9,14 @@ import tempfile
 import time
 
 NATIVE = Path(__file__).resolve().parents[1]
-LOADER = NATIVE / "build/game_loader"
+LOADER = Path(os.getenv("LP32_TEST_LOADER", str(NATIVE / "build/game_loader"))).resolve()
+TEST_GAME = os.getenv("LP32_TEST_GAME", "portal2")
+if TEST_GAME not in ("portal2", "l4d2"):
+    raise ValueError("LP32_TEST_GAME must select portal2 or l4d2")
+TEST_EXECUTABLE = os.getenv("LP32_TEST_EXECUTABLE", "portal2_osx" if TEST_GAME == "portal2" else "")
+if not TEST_EXECUTABLE or Path(TEST_EXECUTABLE).name != TEST_EXECUTABLE:
+    raise ValueError("LP32_TEST_EXECUTABLE must name the audited original Source executable")
+TEST_DATA_DIRECTORY = "Portal2" if TEST_GAME == "portal2" else "L4D2"
 
 
 def run(*args, **kwargs):
@@ -17,7 +24,7 @@ def run(*args, **kwargs):
 
 
 with tempfile.TemporaryDirectory(prefix="lp32-dyld-") as tmp:
-    root = Path(tmp)
+    root = Path(tmp).resolve()
     (root / "bin").mkdir()
     # Link-time declarations only. All actual system calls go through the bridge.
     (root / "libSystem.tbd").write_text("""--- !tapi-tbd-v3
@@ -29,7 +36,7 @@ exports:
     symbols: [
       _NewTimerUPP, _DisposeTimerUPP, _InstallTimeTask, _PrimeTime, _PrimeTimeTask, _RemoveTimeTask,
       _NewSndCallBackUPP, _DisposeSndCallBackUPP, _SndNewChannel, _SndDisposeChannel, _SndDoCommand, _SndDoImmediate, _SndChannelStatus, _OTAtomicAdd32,
-      _wcstoul, _wcstoll, _wcstoull, _wcsdup, _wcspbrk, _wcsspn, _wcscspn, _wcscasecmp, _wcsncasecmp, _atoll, _vswscanf, _iswalnum, _iswalpha, _iswblank, _iswcntrl, _iswdigit, _iswgraph, _iswlower, _iswprint, _iswpunct, _iswspace, _iswupper, _iswxdigit, _towlower, _towupper, _iswctype, _wctype, _towctrans, _wctrans, ___error,
+      _wcstoul, _wcstoll, _wcstoull, _wcsdup, _wcspbrk, _wcsspn, _wcscspn, _wcscasecmp, _wcsncasecmp, _atoll, _vswscanf, _iswalnum, _iswalpha, _iswblank, _iswcntrl, _iswdigit, _iswgraph, _iswlower, _iswprint, _iswpunct, _iswspace, _iswupper, _iswxdigit, _towlower, _towupper, _iswctype, _wctype, _towctrans, _wctrans, ___error, _strerror, _strerror$UNIX2003,
       _wcsstr, _wcsrchr, _wcsncat, _wcscoll, _wcstod, _wcstof, _wcstol, _swscanf, _strtoull, _strtoll, _getenv, _bootstrap_look_up, _bootstrap_port, _mach_task_self_, _mach_port_allocate,
       _mach_port_type, _mach_port_deallocate, _mach_port_mod_refs, _mach_msg, _kill, _kill$UNIX2003,
       _opendir$INODE64, _readdir$INODE64, _readdir_r, _closedir, _closedir$UNIX2003, _setlocale, _vswprintf, _swprintf, _wcscmp, _strlen,
@@ -37,14 +44,22 @@ exports:
       _CGDisplayHideCursor, _CGDisplayShowCursor, _CGCursorIsVisible,
       _CFStringGetBytes, _CFCharacterSetGetPredefined, _CFCharacterSetIsLongCharacterMember, _UpTime, _AbsoluteToNanoseconds, _NanosecondsToAbsolute,
       ___divdi3, ___moddi3, _setjmp, __setjmp, _sigsetjmp, _longjmp,
-      __longjmp, _siglongjmp, _sigprocmask, _sigprocmask$UNIX2003, _memcpy, ___memset_chk,
-      _pthread_create, _pthread_create_suspended_np, _pthread_mach_thread_np, _thread_resume, _pthread_join, _pthread_join$UNIX2003, _usleep,
+      __longjmp, _siglongjmp, _sigprocmask, _sigprocmask$UNIX2003, _memcpy, ___memset_chk, ___bzero,
+      _pthread_create, _pthread_create_suspended_np, _pthread_self, _pthread_mach_thread_np, _thread_suspend, _thread_resume, _pthread_join, _pthread_join$UNIX2003, _usleep,
       _usleep$UNIX2003, _GetCurrentProcess, _AudioObjectGetPropertyData, _AudioQueueNewOutput, _AudioQueueAddPropertyListener, _AudioQueueAllocateBuffer, _AudioQueueSetParameter, _AudioQueueGetParameter,
       _AudioQueueEnqueueBuffer, _AudioQueueStart, _AudioQueueStop, _AudioQueueRemovePropertyListener, _AudioQueueFreeBuffer, _AudioQueueDispose,
+      _AudioConverterNew, _AudioConverterDispose, _AudioConverterSetProperty, _AudioConverterFillComplexBuffer,
+      _FSPathMakeRef, _FSGetCatalogInfo, _OpenMovieFile, _CloseMovieFile, _QTNewGWorld,
+      _QTSetPixMapHandleGammaLevel, _QTSetPixMapHandleRequestedGammaLevel,
+      _EnterMovies, _ExitMovies, _NewMovieFromFile, _DisposeMovie, _GetMoviesError,
+      _GetMovieTimeScale, _GetMovieDuration, _GetMovieNaturalBoundsRect, _GetMovieNextInterestingTime,
+      _SetMovieGWorld, _SetMovieTimeValue, _StartMovie, _StopMovie, _UpdateMovie, _MoviesTask,
       _FindNextComponent, _OpenAComponent, _CloseComponent, _AudioUnitSetProperty, _AudioUnitGetProperty, _AudioUnitGetPropertyInfo,
       _AudioUnitInitialize, _AudioUnitUninitialize, _AudioUnitRender, _alcCaptureOpenDevice, _alcCaptureCloseDevice, _alcGetError,
-      _printf, _fflush, _malloc, _memcmp, ___stdoutp,
-      _strcmp, _strncmp, _strncpy, _lp32_unavailable, _stat, _stat$INODE64, _open$UNIX2003, _open,
+      _printf, _fflush, _malloc, _memcmp, _bsearch, _feof, _ferror, _fopen, _fopen$UNIX2003, _fclose,
+      _fread, _fgetc, _fseek, _clearerr, _strtof, _strtof$UNIX2003,
+      ___stdoutp, __NSGetExecutablePath, _getcwd,
+      _strcmp, _strncmp, _strcasecmp, _strrchr, ___toupper, ___tolower, _strncpy, _lp32_unavailable, _stat, _stat$INODE64, _open$UNIX2003, _open,
       _close, _close$UNIX2003, _lseek, _scandir, _alphasort, _free,
       _sigaction, _raise, _getpid, _iconv_open, _iconv, _iconv_close,
       _mmap, _mmap$UNIX2003, _munmap, _munmap$UNIX2003, _mprotect, _mprotect$UNIX2003,
@@ -67,6 +82,7 @@ exports:
       _CFDictionaryCreateMutable, _CFDictionarySetValue, _CFDictionaryGetValue,
       _CFURLCreateWithBytes, _CFNetworkCopyProxiesForURL,
       _CFUUIDGetConstantUUIDWithBytes, _CFUUIDGetUUIDBytes,
+      _objc_msgSend_stret,
       _CFBooleanGetValue, _CFStringGetMaximumSizeForEncoding,
       _CFAllocatorCreate, _CFAllocatorAllocate, _CFAllocatorDeallocate,
       _CFReadStreamCreate, _CFReadStreamOpen,
@@ -132,6 +148,13 @@ extern int check_mach_ipc(void);
 extern int check_steam(void);
 extern int check_wide_scan(void);
 extern int check_audio_threads(void);
+extern int check_audio_converter(void);
+extern int check_quicktime(void);
+extern int check_strerror(void);
+extern int check_bsearch(void);
+extern int check_libc_io_float(void);
+extern int check_dispatch_strings(void);
+extern int _NSGetExecutablePath(char *, uint32_t *);
 extern int check_audio_unit(void);
 extern int check_sound_manager(void);
 extern int check_time_manager(void);
@@ -162,6 +185,27 @@ __attribute__((constructor)) static void initialize(void) {
     ++count;
 }
 int LauncherMain(void) {
+    /* Query through real i386 imports, including a short buffer and guarded
+       output cells. Report the original executable, not the native loader. */
+    const char *expected_root = getenv("LP32_FIXTURE_EXPECTED_ROOT");
+    const char *expected_executable = getenv("LP32_FIXTURE_EXPECTED_EXECUTABLE");
+    if (expected_root && expected_executable) {
+        struct { char path[4096]; uint32_t guard; } executable = {{0}, 0x1234abcd};
+        struct { uint32_t size; uint32_t guard; } capacity = {1, 0x87654321};
+        if (_NSGetExecutablePath(executable.path, &capacity.size) != -1 ||
+            capacity.size != strlen(expected_root) + strlen(expected_executable) + 2 ||
+            capacity.guard != 0x87654321 || executable.path[0] || executable.guard != 0x1234abcd)
+            return -701;
+        capacity.size = sizeof(executable.path);
+        if (_NSGetExecutablePath(executable.path, &capacity.size) ||
+            strncmp(executable.path, expected_root, strlen(expected_root)) ||
+            executable.path[strlen(expected_root)] != '/' ||
+            strcmp(executable.path + strlen(expected_root) + 1, expected_executable) ||
+            capacity.guard != 0x87654321 || executable.guard != 0x1234abcd)
+            return -702;
+        if (!getcwd(executable.path, sizeof(executable.path)) || strcmp(executable.path, expected_root))
+            return -703;
+    }
     if (getenv("LP32_FIXTURE_BAD_STACK_WORKER")) {
         pthread_t worker;
         if (pthread_create(&worker, NULL, bad_stack_worker, NULL)) return -101;
@@ -210,6 +254,12 @@ int LauncherMain(void) {
     int context_error = check_context(); if (context_error) return context_error;
     int unit_error = check_audio_unit(); if (unit_error) return unit_error;
     int audio_error = check_audio_threads(); if (audio_error) return audio_error;
+    audio_error = check_audio_converter(); if (audio_error) return audio_error;
+    audio_error = check_quicktime(); if (audio_error) return audio_error;
+    audio_error = check_strerror(); if (audio_error) return audio_error;
+    audio_error = check_bsearch(); if (audio_error) return audio_error;
+    audio_error = check_libc_io_float(); if (audio_error) return audio_error;
+    audio_error = check_dispatch_strings(); if (audio_error) return audio_error;
     int timer_error = check_time_manager(); if (timer_error) return timer_error;
     int sound_error = check_sound_manager(); if (sound_error) return sound_error;
     int font_error = check_font(); if (font_error) return font_error;
@@ -399,6 +449,8 @@ int check_directory(void) {
 }
 """)
     (root / "start.S").write_text(".text\n.globl _start\n_start:\n ret\n")
+    (root / "quicktime-file.mov").write_text("file-boundary fixture; not a decoded movie\n")
+    (root / "libc-io.txt").write_bytes(b"abc")
     (root / "helper.S").write_text(".text\n.globl dyld_stub_binding_helper\ndyld_stub_binding_helper:\n ud2\n")
     variants = (("10.5", 0), ("10.6", 0),
                 ("10.5", 0x90000000), ("10.6", 0x90000000))
@@ -407,6 +459,14 @@ int check_directory(void) {
     for version, address in variants:
         flags = ["xcrun", "clang", "-target", "i386-apple-macos" + version,
                  "-nostdlib", "-fno-builtin", "-L" + str(root), "-lSystem", str(root / "helper.S")]
+        if os.getenv("LP32_CF_BRIDGE_ONLY"):
+            optimization = os.getenv("LP32_CF_BRIDGE_OPTIMIZATION", "-O0")
+            assert optimization in ("-O0", "-O2"), optimization
+            flags.append(optimization)
+        # Recent Xcode releases removed i386 from their default linker. A
+        # private older ld64 can build fixtures without changing xcode-select.
+        if os.getenv("LP32_I386_LINKER"):
+            flags.append("-fuse-ld=" + os.environ["LP32_I386_LINKER"])
         run("xcrun", "clang", "-target", "i386-apple-macos" + version,
             "-c", str(root / "directory.c"), "-o", str(root / "directory.o"))
         run(*flags, "-dynamiclib", "-Wl,-install_name,@loader_path/libfixture_dep.dylib",
@@ -420,9 +480,10 @@ int check_directory(void) {
                 "-L" + str(root / "bin"), "-lfixture_dep", "-o", str(root / "bin/libfixture_reexport.dylib"))
             dependency = "fixture_reexport"
         run(*flags, "-dynamiclib", "-Wl,-install_name,@loader_path/launcher.dylib",
-            str(root / "launcher.c"), str(root / "many_imports.c"), str(NATIVE / "tests/fixtures/font.c"), str(NATIVE / "tests/fixtures/cf_bridge.c"), str(NATIVE / "tests/fixtures/context.c"), str(NATIVE / "tests/fixtures/mach_ipc.c"), str(NATIVE / "tests/fixtures/steam_guest.c"), str(NATIVE / "tests/fixtures/wide_scan.c"), str(NATIVE / "tests/fixtures/audio_threads.c"), str(NATIVE / "tests/fixtures/audio_unit.c"), str(NATIVE / "tests/fixtures/sound_manager.c"), str(NATIVE / "tests/fixtures/time_manager.c"), str(root / "directory.o"), "-L" + str(root / "bin"), "-l" + dependency,
+            str(root / "launcher.c"), str(root / "many_imports.c"), str(NATIVE / "tests/fixtures/font.c"), str(NATIVE / "tests/fixtures/cf_bridge.c"), str(NATIVE / "tests/fixtures/context.c"), str(NATIVE / "tests/fixtures/mach_ipc.c"), str(NATIVE / "tests/fixtures/steam_guest.c"), str(NATIVE / "tests/fixtures/wide_scan.c"), str(NATIVE / "tests/fixtures/audio_threads.c"), str(NATIVE / "tests/fixtures/audio_converter.c"), str(NATIVE / "tests/fixtures/quicktime.c"), str(NATIVE / "tests/fixtures/strerror.c"), str(NATIVE / "tests/fixtures/bsearch.c"), str(NATIVE / "tests/fixtures/libc_io_float.c"), str(NATIVE / "tests/fixtures/dispatch_strings.c"), str(NATIVE / "tests/fixtures/audio_unit.c"), str(NATIVE / "tests/fixtures/sound_manager.c"), str(NATIVE / "tests/fixtures/time_manager.c"), str(root / "directory.o"), "-L" + str(root / "bin"), "-l" + dependency,
             "-o", str(root / "bin/launcher.dylib"))
-        run(*flags, "-Wl,-e,_start,-no_pie", str(root / "start.S"), "-o", str(root / "portal2_osx"))
+        image = root / TEST_EXECUTABLE
+        run(*flags, "-Wl,-e,_start,-no_pie", str(root / "start.S"), "-o", str(image))
         # Exercise universal i386 selection on a real generated dylib.
         dep = root / "bin/libfixture_dep.dylib"
         thin = dep.read_bytes()
@@ -440,15 +501,20 @@ int check_directory(void) {
         malformed = bytearray(thin)
         struct.pack_into("<I", malformed, 20, 0xFFFFFFFF)
         (root / "bin/broken.dylib").write_bytes(malformed)
-        environment = dict(os.environ, LP32_GAME="portal2", LP32_MUTE_AUDIO="1", LP32_DYLD_SELFTEST="1",
+        environment = dict(os.environ, LP32_GAME=TEST_GAME, LP32_MUTE_AUDIO="1", LP32_DYLD_SELFTEST="1",
                            LP32_DYLD_FIXTURE_SELFTEST="1", LP32_LOG_DIR=str(root / "logs"),
-                           LP32_STEAM_FIXTURE=str(root / "steamclient.dylib"))
-        if version == "10.5" and address == 0 and not os.getenv("LP32_CF_BRIDGE_ONLY"):
+                           LP32_STEAM_FIXTURE=str(root / "steamclient.dylib"),
+                           LP32_FIXTURE_EXPECTED_ROOT=str(root), LP32_FIXTURE_EXPECTED_EXECUTABLE=TEST_EXECUTABLE)
+        for index, error in enumerate((65, 2, 13, 0, -1, -2147483648, 2147483647, 123456789)):
+            environment[f"LP32_STRERROR_{index}"] = os.strerror(error)
+        if TEST_GAME == "l4d2":
+            environment["LP32_FIXTURE_QUICKTIME"] = "1"
+        if TEST_GAME == "portal2" and version == "10.5" and address == 0 and not os.getenv("LP32_CF_BRIDGE_ONLY"):
             logs = root / "logs"
             logs.mkdir()
             (logs / "last-run.log").write_text("legacy log retained\n")
             (logs / "user-note.log").write_text("keep this unrelated file\n")
-            command = ["arch", "-x86_64", str(LOADER), str(root / "portal2_osx")]
+            command = ["arch", "-x86_64", str(LOADER), str(image)]
             log_env = dict(environment, LP32_LOG_SELFTEST="1")
             # Finder discards both streams; the session must capture both.
             run(*command, env=log_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -529,7 +595,7 @@ int check_directory(void) {
                     crash_env = dict(environment)
                     crash_env["LP32_CRASH_DIAGNOSTIC_SELFTEST" if mode == "host" else
                               "LP32_FIXTURE_" + fatal_signal.name] = fatal_signal.name
-                    crashed = subprocess.run(["arch", "-x86_64", str(LOADER), str(root / "portal2_osx")],
+                    crashed = subprocess.run(["arch", "-x86_64", str(LOADER), str(image)],
                         env=crash_env, capture_output=True, text=True, timeout=30)
                     assert crashed.returncode == -fatal_signal, (mode, fatal_signal, crashed.returncode, crashed.stderr)
                     assert f"compat32: signal {int(fatal_signal)} " in crashed.stderr and "crash rax=" in crashed.stderr, crashed.stderr
@@ -538,7 +604,7 @@ int check_directory(void) {
                     if mode == "host" or (mode == "guest" and fatal_signal not in (signal.SIGBUS, signal.SIGABRT)):
                         assert "active import " not in crashed.stderr, crashed.stderr
             print("Fatal-signal diagnostics: PASS (SIGILL/SIGSEGV/SIGBUS/SIGABRT, host and i386 guest; default signal termination preserved)")
-            crashed = subprocess.run(["arch", "-x86_64", str(LOADER), str(root / "portal2_osx")],
+            crashed = subprocess.run(["arch", "-x86_64", str(LOADER), str(image)],
                 env=dict(environment, LP32_FIXTURE_IMPORT_CRASH="1"),
                 capture_output=True, text=True, timeout=30)
             assert crashed.returncode == -signal.SIGSEGV, crashed.stderr
@@ -547,14 +613,14 @@ int check_directory(void) {
                 assert expected in crashed.stderr, crashed.stderr
                 assert expected in (logs / "last-run.log").read_text()
             print("Import crash context: PASS (strncpy caller and original i386 arguments)")
-            crashed = subprocess.run(["arch", "-x86_64", str(LOADER), str(root / "portal2_osx")],
+            crashed = subprocess.run(["arch", "-x86_64", str(LOADER), str(image)],
                 env=dict(environment, LP32_FIXTURE_NESTED_IMPORT_CRASH="1"),
                 capture_output=True, text=True, timeout=30)
             assert crashed.returncode == -signal.SIGSEGV, crashed.stderr
             assert "active import _lp32_steam_method_34 caller=0x" in crashed.stderr, crashed.stderr
             assert "active import _getenv " not in crashed.stderr, crashed.stderr
             print("Nested import crash context: PASS (enclosing Steam call restored after callback)")
-        run("arch", "-x86_64", str(LOADER), str(root / "portal2_osx"), env=environment)
+        run("arch", "-x86_64", str(LOADER), str(image), env=environment)
         # Re-run the same real i386 code under the newer Mac depot layout.
         # The launcher's explicit bin/ paths must find libraries in osx32 too.
         binaries = list((root / "bin").iterdir())
@@ -563,9 +629,19 @@ int check_directory(void) {
         for binary in binaries:
             binary.rename(osx32 / binary.name)
         try:
-            run("arch", "-x86_64", str(LOADER), str(root / "portal2_osx"), env=environment)
+            run("arch", "-x86_64", str(LOADER), str(image), env=environment)
         finally:
             for binary in osx32.iterdir():
                 binary.rename(root / "bin" / binary.name)
             osx32.rmdir()
-        print(f"Guest dylib fixtures: PASS (macOS {version}, preferred address 0x{address:x})")
+        # The bundled image is beside its selected game tree. A symlink keeps
+        # the generated data identical across these layout checks.
+        support = root / "fixture.app/Contents/SharedSupport"
+        support.mkdir(parents=True, exist_ok=True)
+        data = support / TEST_DATA_DIRECTORY
+        if not data.exists():
+            data.symlink_to(root, target_is_directory=True)
+        bundled_image = support / ("Portal2.image" if TEST_GAME == "portal2" else "L4D2.image")
+        bundled_image.write_bytes(image.read_bytes())
+        run("arch", "-x86_64", str(LOADER), str(bundled_image), env=environment)
+        print(f"Guest dylib fixtures: PASS ({TEST_GAME}, macOS {version}, preferred address 0x{address:x}; bin, osx32, bundle)")

@@ -74,6 +74,10 @@ def code(t, result=False, output_string=False):
         return "E"
     if t == "HServerListRequest":
         return "h"
+    if t == "ISteamMatchmakingServerListResponse *" and not result:
+        return "R"
+    if t == "MatchMakingKeyValuePair_t **" and not result:
+        return "F"
     if result and (t.startswith("ISteam") and t.endswith("*") or t == "void *"):
         return "o"
     if result and t == "char *":
@@ -159,8 +163,13 @@ for obj in api["interfaces"]:
             continue
         params = []
         ret = "unsupported_private"
-        if name in ("RunFrame", "DestroyAllInterfaces"):
+        if name in ("RunFrame", "DestroyAllInterfaces", "ForceMasterServerHeartbeat_DEPRECATED"):
             ret = "void"
+        # SDK 1.53a's GameServer014 header includes these two private vtable
+        # slots, but steam_api.json omits them. They are real native calls.
+        if name == "SetMasterServerHeartbeatInterval_DEPRECATED":
+            ret = "void"
+            params = [{"paramtype": "int"}]
         if name == "GetCSERIPPort":
             ret = "bool"
             params = [{"paramtype": "uint32 *"}, {"paramtype": "uint16 *"}]
@@ -236,6 +245,17 @@ methods += [
     ("SendMessage", "i", "ipi"),
     ("IsMessageAvailable", "b", "p"),
     ("RetrieveMessage", "i", "ppip"),
+]
+# L4D2's client uses this later public interface, absent from SDK 1.53a.
+# Valve's exact V001 declaration is src/public/steam/isteamtimeline.h in
+# source-sdk-2013 commit 0759e2e8e179d5352d81d0d4aaded72c1704b7a9.
+# Append it so the existing generated method ordinals remain stable.
+interfaces.append(("STEAMTIMELINE_INTERFACE_V001", len(methods), 4))
+methods += [
+    ("SetTimelineStateDescription", "v", "pf"),
+    ("ClearTimelineStateDescription", "v", "f"),
+    ("AddTimelineEvent", "v", "pppiffi"),
+    ("SetTimelineGameMode", "v", "i"),
 ]
 out = [
     "/* Generated ABI descriptions; see tools/generate_steam_abi.py. */",

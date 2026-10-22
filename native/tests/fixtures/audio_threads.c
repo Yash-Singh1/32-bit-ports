@@ -10,6 +10,8 @@ extern int GetCurrentProcess(void *);
 
 static volatile int worker_ran, returned_buffer, listener_ran;
 static int *worker_errno;
+static uint32_t self_suspend_port, self_suspend_ready, self_suspend_completed;
+static kern_return_t self_suspend_status;
 static AudioQueueRef expected_queue;
 static AudioQueueBufferRef expected_buffer;
 
@@ -19,6 +21,15 @@ static void *worker(void *info)
     *worker_errno = EACCES;
     worker_ran = (uintptr_t)info == 0x12345 ? 1 : -1;
     return (void *)0x56789;
+}
+static void *self_suspending_worker(void *unused)
+{
+    (void)unused;
+    self_suspend_port = pthread_mach_thread_np(pthread_self());
+    __atomic_store_n(&self_suspend_ready, 1, __ATOMIC_RELEASE);
+    self_suspend_status = thread_suspend(self_suspend_port);
+    __atomic_store_n(&self_suspend_completed, 1, __ATOMIC_RELEASE);
+    return (void *)0x34567;
 }
 static void buffer_done(void *info, AudioQueueRef q, AudioQueueBufferRef b)
 {
@@ -90,11 +101,36 @@ int check_audio_threads(void)
     usleep(10000);
     if (worker_ran || t.guard != 0x12345678) return -201;
     mach_port_t port = pthread_mach_thread_np(t.thread);
-    if (!port || thread_resume(port)) return -202;
+    if (!port || thread_suspend(port) || thread_resume(port)) return -202;
+    /* One resume balances the extra suspend; the creation suspend remains.
+       A fake successful thread_suspend would let the worker run here. */
+    usleep(10000);
+    if (worker_ran || thread_resume(port)) return -223;
     struct { void *value; uint32_t guard; } joined = {0, 0x87654321};
     if (pthread_join(t.thread, &joined.value) || worker_ran != 1 ||
         joined.value != (void *)0x56789 || joined.guard != 0x87654321 ||
         worker_errno == main_errno || !worker_errno || *worker_errno != EACCES) return -203;
+    if (thread_suspend(MACH_PORT_NULL) == KERN_SUCCESS) return -224;
+    self_suspend_port = self_suspend_ready = self_suspend_completed = 0;
+    self_suspend_status = KERN_FAILURE;
+    if (pthread_create(&t.thread, NULL, self_suspending_worker, NULL)) return -225;
+    unsigned attempts = 0, successful_resumes = 0;
+    while (!__atomic_load_n(&self_suspend_ready, __ATOMIC_ACQUIRE) && attempts++ < 10000)
+        usleep(100);
+    if (!__atomic_load_n(&self_suspend_ready, __ATOMIC_ACQUIRE) || !self_suspend_port) return -226;
+    /* Publishing readiness precedes entering the kernel. Early resumes must
+       report the native error; retry until the actual self-suspend is resumed.
+       A no-op suspend cannot produce a successful native resume. */
+    attempts = 0;
+    while (!__atomic_load_n(&self_suspend_completed, __ATOMIC_ACQUIRE) && attempts++ < 10000) {
+        if (thread_resume(self_suspend_port) == KERN_SUCCESS) ++successful_resumes;
+        usleep(100);
+    }
+    if (!__atomic_load_n(&self_suspend_completed, __ATOMIC_ACQUIRE) ||
+        !successful_resumes || self_suspend_status != KERN_SUCCESS)
+        return -227;
+    if (pthread_join(t.thread, &joined.value) || joined.value != (void *)0x34567 ||
+        t.guard != 0x12345678 || joined.guard != 0x87654321) return -228;
 
     AudioStreamBasicDescription format = {44100, kAudioFormatLinearPCM,
         kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked, 4, 1, 4, 2, 16, 0};

@@ -227,12 +227,12 @@ static const struct steam_method steam_methods[] = {
     {"SetLobbyOwner", 'b', "qq"},
     {"SetLinkedLobby", 'b', "qq"},
     {"CheckForPSNGameBootInvite", '?', ""},
-    {"RequestInternetServerList", 'h', "i?i?"},
-    {"RequestLANServerList", 'h', "i?"},
-    {"RequestFriendsServerList", 'h', "i?i?"},
-    {"RequestFavoritesServerList", 'h', "i?i?"},
-    {"RequestHistoryServerList", 'h', "i?i?"},
-    {"RequestSpectatorServerList", 'h', "i?i?"},
+    {"RequestInternetServerList", 'h', "iFiR"},
+    {"RequestLANServerList", 'h', "iR"},
+    {"RequestFriendsServerList", 'h', "iFiR"},
+    {"RequestFavoritesServerList", 'h', "iFiR"},
+    {"RequestHistoryServerList", 'h', "iFiR"},
+    {"RequestSpectatorServerList", 'h', "iFiR"},
     {"ReleaseRequest", 'v', "h"},
     {"GetServerDetails", '?', "hi"},
     {"CancelQuery", 'v', "h"},
@@ -884,8 +884,8 @@ static const struct steam_method steam_methods[] = {
     {"CreateUnauthenticatedUserConnection", 'q', ""},
     {"SendUserDisconnect_DEPRECATED", 'v', "q"},
     {"BUpdateUserData", 'b', "qpi"},
-    {"SetMasterServerHeartbeatInterval_DEPRECATED", '?', ""},
-    {"ForceMasterServerHeartbeat_DEPRECATED", '?', ""},
+    {"SetMasterServerHeartbeatInterval_DEPRECATED", 'v', "i"},
+    {"ForceMasterServerHeartbeat_DEPRECATED", 'v', ""},
     {"RequestUserStats", 'q', "q"},
     {"GetUserStat", 'b', "qpp"},
     {"GetUserStat", 'b', "qpp"},
@@ -983,6 +983,10 @@ static const struct steam_method steam_methods[] = {
     {"SendMessage", 'i', "ipi"},
     {"IsMessageAvailable", 'b', "p"},
     {"RetrieveMessage", 'i', "ppip"},
+    {"SetTimelineStateDescription", 'v', "pf"},
+    {"ClearTimelineStateDescription", 'v', "f"},
+    {"AddTimelineEvent", 'v', "pppiffi"},
+    {"SetTimelineGameMode", 'v', "i"},
 };
 static const struct steam_interface steam_interfaces[] = {
     {"SteamClient020", 0, 42},
@@ -1018,6 +1022,7 @@ static const struct steam_interface steam_interfaces[] = {
     {"SteamClient017", 896, 37},
     {"SteamInput005", 933, 47},
     {"SteamGameCoordinator001", 980, 3},
+    {"STEAMTIMELINE_INTERFACE_V001", 983, 4},
 };
 static const int steam_plain_callbacks[] = {
     101, /* SteamServersConnected_t */

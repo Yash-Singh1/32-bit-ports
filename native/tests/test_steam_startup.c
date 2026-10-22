@@ -1,6 +1,8 @@
 #include "steam_startup.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 struct fixture {
     bool running, authenticated, open_ok;
@@ -31,6 +33,20 @@ static enum steam_startup_result prepare(struct fixture *f) {
     return steam_startup_prepare(&ops);
 }
 int main(void) {
+    assert(setenv("SteamAppId", "unrelated", 1) == 0);
+    assert(setenv("SteamGameId", "620", 1) == 0);
+    assert(steam_startup_set_app_id(550));
+    assert(!strcmp(getenv("SteamAppId"), "550"));
+    assert(!strcmp(getenv("SteamGameId"), "550"));
+    assert(!steam_startup_set_app_id(0));
+    assert(!strcmp(getenv("SteamAppId"), "550"));
+    assert(!strcmp(getenv("SteamGameId"), "550"));
+    assert(steam_startup_set_app_id(620));
+    assert(!strcmp(getenv("SteamAppId"), "620"));
+    assert(!strcmp(getenv("SteamGameId"), "620"));
+    assert(steam_startup_set_app_id(UINT32_MAX));
+    assert(!strcmp(getenv("SteamAppId"), "4294967295"));
+    assert(!strcmp(getenv("SteamGameId"), "4294967295"));
     struct fixture ready = {.running = true, .authenticated = true};
     assert(prepare(&ready) == STEAM_STARTUP_READY);
     assert(ready.opens == 0 && ready.waits == 0 && ready.shutdowns == 1);
@@ -46,5 +62,5 @@ int main(void) {
     struct fixture timeout = {.running = true, .open_ok = true};
     assert(prepare(&timeout) == STEAM_STARTUP_TIMEOUT);
     assert(timeout.opens == 1 && timeout.waits == 5 && timeout.shutdowns == 0);
-    puts("Steam startup: PASS (already ready, automatic launch, sign-in wait, launch failure, bounded timeout)");
+    puts("Steam startup: PASS (game identity, already ready, automatic launch, sign-in wait, launch failure, bounded timeout)");
 }
