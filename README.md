@@ -27,8 +27,16 @@ Supported and candidate games:
 
 ## Left 4 Dead 2
 
-L4D2 support uses the original **Mac** game files and the installed Steam client.
-From `native/`, build a separate compatibility app with:
+L4D2 support was implemented by [@tomtastic](https://github.com/tomtastic).
+Download [L4D2 Converter 0.0.0-dev.1](https://github.com/Yash-Singh1/32-bit-ports/releases/tag/l4d2-converter-v0.0.0-dev.1),
+unzip it, and open **L4D2-Converter.app**. Choose your complete original Mac game
+folder and an output folder to create a separate compatibility app. The
+converter requires macOS 11 or later, Steam ownership, and Rosetta 2 on Apple
+Silicon. It downloads Apple's runtime on first use and needs no developer tools.
+This development build is ad hoc signed and is not notarized.
+
+From `native/`, build the converter with `make l4d2-converter`, or build a
+compatibility app directly with:
 
 ```sh
 make GAME=l4d2 SOURCE_GAME="$HOME/Library/Application Support/Steam/steamapps/common/Left 4 Dead 2" bundle

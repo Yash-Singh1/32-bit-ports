@@ -64,11 +64,11 @@ struct L4D2Source {
         }
     }
 
-    func copyGame(to destination: URL) throws {
+    func copyGame(to destination: URL, check: () throws -> Void = {}) throws {
         try checkDestination(destination)
         // Materialize source links so a running converted game cannot write
         // settings through a retained link into the original installation.
-        try copySourceGameRoots([root], to: destination, materializeLinks: true)
+        try copySourceGameRoots([root], to: destination, materializeLinks: true, check: check)
     }
 
     func prepareBundle(at app: URL) throws {

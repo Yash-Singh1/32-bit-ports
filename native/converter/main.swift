@@ -5,7 +5,7 @@ import AppKit
 if CommandLine.arguments.count > 1 && CommandLine.arguments[1] == "--convert" {
     let args = CommandLine.arguments
     guard args.count == 4 || args.count == 6 && args[4] == "--cache" else {
-        fputs("Usage: Portal2Converter --convert SOURCE_APP_OR_FOLDER OUTPUT_FOLDER [--cache CACHE_FOLDER]\n", stderr)
+        fputs("Usage: \(ConverterGame.stem)Converter --convert SOURCE_APP_OR_FOLDER OUTPUT_FOLDER [--cache CACHE_FOLDER]\n", stderr)
         exit(2)
     }
     let cache = args.count == 6 ? URL(fileURLWithPath: args[5]) : Converter.defaultCache

@@ -2,6 +2,28 @@ import Foundation
 import CryptoKit
 import Darwin
 
+// The two converter apps share the same engine and window. The build target
+// selects the game; the Portal 2 app keeps its existing layouts and identity.
+#if L4D2_CONVERTER
+typealias ConverterSource = L4D2Source
+enum ConverterGame {
+    static let name = "Left 4 Dead 2"
+    static let stem = "L4D2"
+    static let executable = "hl2_osx"
+    static let sourceDetail = "A complete Mac app or Steam game folder.\nFor Steam, choose Left 4 Dead 2 inside steamapps/common."
+    static let pickerMessage = "Choose the complete Left 4 Dead 2 Mac game folder inside steamapps/common, or a Mac app containing it. Separate depots must be assembled first."
+}
+#else
+typealias ConverterSource = Portal2Source
+enum ConverterGame {
+    static let name = "Portal 2"
+    static let stem = "Portal2"
+    static let executable = "portal2_osx"
+    static let sourceDetail = "A Mac app, Steam game folder, or downloaded depots.\nFor Steam, choose the Portal 2 folder inside steamapps/common."
+    static let pickerMessage = "For Steam, choose the Portal 2 folder inside steamapps/common.\nDefault location: ~/Library/Application Support/Steam/steamapps/common/Portal 2\nYou can also choose Portal 2.app or a folder of downloaded depots."
+}
+#endif
+
 enum ConversionError: LocalizedError {
     case message(String)
     case cancelled
@@ -80,7 +102,7 @@ func isInside(_ child: URL, _ parent: URL) -> Bool {
 // its saves), even if another conversion finishes at the same moment.
 func publish(_ staged: URL, in directory: URL) throws -> URL {
     for suffix in 1...10000 {
-        let name = suffix == 1 ? "Portal2-Compat.app" : "Portal2-Compat \(suffix).app"
+        let name = suffix == 1 ? "\(ConverterGame.stem)-Compat.app" : "\(ConverterGame.stem)-Compat \(suffix).app"
         let output = directory.appendingPathComponent(name)
         if renamex_np(staged.path, output.path, UInt32(RENAME_EXCL)) == 0 { return output }
         let code = errno
@@ -100,7 +122,7 @@ final class Converter {
     ]
     static var defaultCache: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("org.32bitgoofy.Portal2Converter")
+            .appendingPathComponent("org.32bitgoofy.\(ConverterGame.stem)Converter")
     }
 
     let cancellation = Cancellation()
@@ -271,40 +293,50 @@ final class Converter {
               !(converterApp.pathExtension == "app" && isInside(destination, converterApp)) else {
             throw ConversionError.message("Choose an output folder outside the original game and the converter app.")
         }
-        let layout = try Portal2Source.discover(source)
+        let layout = try ConverterSource.discover(source)
         try layout.checkDestination(destination)
         let image = layout.image
         try cancellation.check()
         progress("Preparing compatibility files…", "Your original game files and existing converted copies stay untouched.")
         let runtime = try prepareRuntime()
-        let temp = destination.appendingPathComponent(".portal2-converting-\(UUID().uuidString)")
+        let temp = destination.appendingPathComponent(".\(ConverterGame.stem.lowercased())-converting-\(UUID().uuidString)")
         try fm.createDirectory(at: temp, withIntermediateDirectories: false)
         defer { try? fm.removeItem(at: temp) }
-        let app = temp.appendingPathComponent("Portal2-Compat.app")
+        let app = temp.appendingPathComponent("\(ConverterGame.stem)-Compat.app")
         let output = app.appendingPathComponent("Contents")
         for directory in ["MacOS", "Resources", "SharedSupport"] {
             try fm.createDirectory(at: output.appendingPathComponent(directory), withIntermediateDirectories: true)
         }
-        progress("Copying Portal 2…", "Combining the game files into your new app. Saves stored in the source come with it.")
-        try layout.copyGame(to: output.appendingPathComponent("SharedSupport/Portal2"), check: cancellation.check)
+        progress("Copying \(ConverterGame.name)…", "Copying the game files and settings into your new app.")
+        try layout.copyGame(to: output.appendingPathComponent("SharedSupport/\(ConverterGame.stem)"), check: cancellation.check)
+        #if L4D2_CONVERTER
+        if let icon = layout.icon {
+            try Data(contentsOf: icon).write(to: output.appendingPathComponent("Resources/game.icns"))
+        }
+        #else
         if let resources = layout.resources {
             try run("/usr/bin/ditto", ["--noextattr", "--noqtn", resources.path,
                                       output.appendingPathComponent("Resources").path])
         } else if let icon = layout.icon {
             try fm.copyItem(at: icon, to: output.appendingPathComponent("Resources/game.icns"))
         }
+        #endif
         try cancellation.check()
-        try fm.copyItem(at: image, to: output.appendingPathComponent("SharedSupport/Portal2.image"))
-        try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: output.appendingPathComponent("SharedSupport/Portal2.image").path)
-        let runtimeOutput = output.appendingPathComponent("SharedSupport/Portal2/compat-runtime")
+        #if L4D2_CONVERTER
+        try Data(contentsOf: image).write(to: output.appendingPathComponent("SharedSupport/\(ConverterGame.stem).image"))
+        #else
+        try fm.copyItem(at: image, to: output.appendingPathComponent("SharedSupport/\(ConverterGame.stem).image"))
+        #endif
+        try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: output.appendingPathComponent("SharedSupport/\(ConverterGame.stem).image").path)
+        let runtimeOutput = output.appendingPathComponent("SharedSupport/\(ConverterGame.stem)/compat-runtime")
         // Remove only the new copy's old entry (including a symlink), before
         // copying private libraries. Never follow an input link when writing.
         if (try? fm.attributesOfItem(atPath: runtimeOutput.path)) != nil { try fm.removeItem(at: runtimeOutput) }
         try run("/usr/bin/ditto", ["--noextattr", "--noqtn", runtime.path, runtimeOutput.path])
-        try fm.copyItem(at: resources.appendingPathComponent("game_loader"), to: output.appendingPathComponent("MacOS/Portal2Compat"))
-        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: output.appendingPathComponent("MacOS/Portal2Compat").path)
-        try fm.copyItem(at: resources.appendingPathComponent("Info-Portal2.plist"), to: output.appendingPathComponent("Info.plist"))
-        progress("Finishing your app…", "Preparing Portal 2 to open from Finder.")
+        try fm.copyItem(at: resources.appendingPathComponent("game_loader"), to: output.appendingPathComponent("MacOS/\(ConverterGame.stem)Compat"))
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: output.appendingPathComponent("MacOS/\(ConverterGame.stem)Compat").path)
+        try fm.copyItem(at: resources.appendingPathComponent("Info-\(ConverterGame.stem).plist"), to: output.appendingPathComponent("Info.plist"))
+        progress("Finishing your app…", "Preparing \(ConverterGame.name) to open from Finder.")
         try run("/usr/bin/codesign", ["--force", "--sign", "-", app.path])
         try run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path])
         try cancellation.check()

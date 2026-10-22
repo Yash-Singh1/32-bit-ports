@@ -149,6 +149,25 @@ portal2-converter: $(BUILD_DIR)/converter-arm64 $(BUILD_DIR)/converter-x86_64 $(
 	codesign --force --sign - "$(CONVERTER_APP)"
 	codesign --verify --deep --strict "$(CONVERTER_APP)"
 
+L4D2_CONVERTER_SOURCES := $(CONVERTER_SOURCES) converter/L4D2Source.swift
+L4D2_CONVERTER_APP := $(BUILD_DIR)/L4D2-Converter.app
+
+$(BUILD_DIR)/l4d2-converter-arm64: $(L4D2_CONVERTER_SOURCES) | $(BUILD_DIR)
+	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -D L4D2_CONVERTER -target arm64-apple-macosx11.0 -sdk $(SDK) $^ -o $@
+
+$(BUILD_DIR)/l4d2-converter-x86_64: $(L4D2_CONVERTER_SOURCES) | $(BUILD_DIR)
+	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -D L4D2_CONVERTER -target x86_64-apple-macosx11.0 -sdk $(SDK) $^ -o $@
+
+.PHONY: l4d2-converter
+l4d2-converter: $(BUILD_DIR)/l4d2-converter-arm64 $(BUILD_DIR)/l4d2-converter-x86_64 $(BUILD_DIR)/game_loader converter/Info-L4D2.plist Info-L4D2.plist
+	mkdir -p "$(L4D2_CONVERTER_APP)/Contents/MacOS" "$(L4D2_CONVERTER_APP)/Contents/Resources"
+	lipo -create $(BUILD_DIR)/l4d2-converter-arm64 $(BUILD_DIR)/l4d2-converter-x86_64 -output "$(L4D2_CONVERTER_APP)/Contents/MacOS/L4D2Converter"
+	cp converter/Info-L4D2.plist "$(L4D2_CONVERTER_APP)/Contents/Info.plist"
+	cp $(BUILD_DIR)/game_loader Info-L4D2.plist "$(L4D2_CONVERTER_APP)/Contents/Resources/"
+	codesign --force --sign - "$(L4D2_CONVERTER_APP)/Contents/Resources/game_loader"
+	codesign --force --sign - "$(L4D2_CONVERTER_APP)"
+	codesign --verify --deep --strict "$(L4D2_CONVERTER_APP)"
+
 $(BUILD_DIR)/test_portal2_converter: $(CONVERTER_CORE) tests/test_portal2_converter.swift | $(BUILD_DIR)
 	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -target $(shell uname -m)-apple-macosx11.0 -sdk $(SDK) $^ -o $@
 
