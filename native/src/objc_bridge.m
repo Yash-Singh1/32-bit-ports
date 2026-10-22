@@ -2201,6 +2201,75 @@ static size_t test_key_fifo_length;
 static NSPoint test_click_point;
 static bool test_click_point_valid;
 
+/* Gangstar turns the camera by CGGetLastMouseDelta, read once per mouse
+   event its view handles, and re-centres the cursor with a warp after each
+   one.  The host's last delta can include that warp (GLFW subtracts its own
+   warps from the next delta), which cancels the movement whatever the
+   sensitivity setting.  The movement is taken from positions instead: from
+   the previous event, or from the warp target when the game warped before
+   this event happened, and summed until the game reads it. */
+static os_unfair_lock mouse_delta_lock = OS_UNFAIR_LOCK_INIT;
+static double mouse_delta[2];
+static CGPoint mouse_last;
+static bool mouse_last_valid;
+static CGPoint mouse_warp;
+static NSTimeInterval mouse_warp_time;
+static bool mouse_warp_pending;
+
+static void note_mouse_warp(CGPoint target)
+{
+    os_unfair_lock_lock(&mouse_delta_lock);
+    /* Every warp goes to the view centre; an event after the first one
+       not yet seen starts from there. */
+    mouse_warp = target;
+    if (!mouse_warp_pending) mouse_warp_time = [[NSProcessInfo processInfo] systemUptime];
+    mouse_warp_pending = true;
+    os_unfair_lock_unlock(&mouse_delta_lock);
+}
+
+/* An unattended run sees only its scripted moves, not the user's mouse
+   passing over its window. */
+static bool test_mouse_scripted;
+
+void objc_bridge32_note_mouse_event(void *object)
+{
+    if (background_test_mode() && !test_mouse_scripted) return;
+    NSEvent *event = object;
+    CGEventRef cg = event.CGEvent;
+    CGPoint where = cg ? CGEventGetLocation(cg) : CGPointZero;
+    NSTimeInterval when = event.timestamp;
+    os_unfair_lock_lock(&mouse_delta_lock);
+    CGPoint from = mouse_last;
+    bool known = mouse_last_valid;
+    if (mouse_warp_pending && mouse_warp_time <= when) {
+        from = mouse_warp;
+        known = true;
+        mouse_warp_pending = false;
+    }
+    if (cg && known) {
+        mouse_delta[0] += where.x - from.x;
+        mouse_delta[1] += where.y - from.y;
+    } else {
+        mouse_delta[0] += event.deltaX;
+        mouse_delta[1] += event.deltaY;
+    }
+    mouse_last = where;
+    mouse_last_valid = cg != NULL;
+    os_unfair_lock_unlock(&mouse_delta_lock);
+}
+
+static void take_mouse_delta(int32_t *dx, int32_t *dy)
+{
+    os_unfair_lock_lock(&mouse_delta_lock);
+    *dx = (int32_t)mouse_delta[0];
+    *dy = (int32_t)mouse_delta[1];
+    mouse_delta[0] -= *dx;
+    mouse_delta[1] -= *dy;
+    os_unfair_lock_unlock(&mouse_delta_lock);
+    if (getenv("LP32_TRACE_INPUT") && (*dx || *dy))
+        fprintf(stderr, "compat32: mouse delta %d,%d\n", *dx, *dy);
+}
+
 static int read_test_key_fifo(double *hold_seconds, unsigned long *modifiers)
 {
     if (test_key_fifo_fd == -2) {
@@ -2237,7 +2306,8 @@ static int read_test_key_fifo(double *hold_seconds, unsigned long *modifiers)
     char *flags_end = hold_end;
     unsigned long flags = hold_end ? strtoul(hold_end, &flags_end, 0) : 0;
     /* Optional fourth and fifth fields for clicks (1000-1002): the point in
-       window coordinates (origin bottom left); the window centre otherwise. */
+       window coordinates (origin bottom left); the window centre otherwise.
+       For a relative move (1003) they are the movement in points. */
     char *x_end = flags_end;
     double x = flags_end ? strtod(flags_end, &x_end) : 0, y = 0;
     char *y_end = x_end;
@@ -2249,7 +2319,7 @@ static int read_test_key_fifo(double *hold_seconds, unsigned long *modifiers)
             test_key_fifo_length - consumed);
     test_key_fifo_length -= consumed;
     if (end == test_key_fifo_buffer || key_code < 0 ||
-        (key_code > 127 && (key_code < 1000 || key_code > 1002))) {
+        (key_code > 127 && (key_code < 1000 || key_code > 1003))) {
         return -1;
     }
     *hold_seconds = hold;
@@ -2322,6 +2392,33 @@ static void post_test_key_event_with_modifiers(NSWindow *window,
                                                unsigned long modifiers)
 {
     if (!window) return;
+    /* Test-only: code 1003 moves the mouse by the scripted point, from where
+       the game last warped the cursor (or the window centre), on screen
+       coordinates as the hardware would. */
+    if (key_code == 1003) {
+        if (!is_down) return;
+        NSRect centre = [window convertRectToScreen:NSMakeRect(NSMidX(window.contentView.frame),
+                                                               NSMidY(window.contentView.frame), 0, 0)];
+        CGPoint from = CGPointMake(centre.origin.x, NSMaxY(NSScreen.screens.firstObject.frame) - centre.origin.y);
+        os_unfair_lock_lock(&mouse_delta_lock);
+        if (mouse_warp_time > 0) from = mouse_warp;
+        os_unfair_lock_unlock(&mouse_delta_lock);
+        double dx = test_click_point_valid ? test_click_point.x : 0, dy = test_click_point_valid ? test_click_point.y : 0;
+        CGEventRef cg = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, CGPointMake(from.x + dx, from.y + dy), 0);
+        CGEventSetIntegerValueField(cg, kCGMouseEventDeltaX, (int64_t)dx);
+        CGEventSetIntegerValueField(cg, kCGMouseEventDeltaY, (int64_t)dy);
+        CGEventSetTimestamp(cg, clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
+        NSEvent *move = cg ? [NSEvent eventWithCGEvent:cg] : nil;
+        if (cg) CFRelease(cg);
+        NSView *view = [window.contentView hitTest:NSMakePoint(NSMidX(window.contentView.bounds), NSMidY(window.contentView.bounds))];
+        fprintf(stderr, "compat32: test mouse move %.0f,%.0f\n", dx, dy);
+        if (move && view && background_test_mode()) {
+            test_mouse_scripted = true;
+            [view mouseMoved:move];
+            test_mouse_scripted = false;
+        } else if (move) [NSApp postEvent:move atStart:NO];
+        return;
+    }
     /* Test-only: codes 1000-1002 click the left, right and middle buttons. */
     if (key_code >= 1000 && key_code <= 1002) {
         unsigned button = key_code - 1000;
@@ -8748,7 +8845,8 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         int32_t dx = 0, dy = 0;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        if (!background_test_mode() && !lp32_suppress_background_input()) CGGetLastMouseDelta(&dx, &dy);
+        if (lp32_profile()->title == LP32_TITLE_GANGSTAR) take_mouse_delta(&dx, &dy);
+        else if (!background_test_mode() && !lp32_suppress_background_input()) CGGetLastMouseDelta(&dx, &dy);
 #pragma clang diagnostic pop
         if (arguments[0]) *(int32_t *)(uintptr_t)arguments[0] = dx;
         if (arguments[1]) *(int32_t *)(uintptr_t)arguments[1] = dy;
@@ -10847,7 +10945,23 @@ static int objc_bridge32_dispatch_body(const char *import_name,
             cod4_mouse_position[0] = (int16_t)xy[1]; cod4_mouse_position[1] = (int16_t)xy[0];
             cod4_mouse_position_valid = true;
         }
-        *result = (background_test_mode() || lp32_suppress_background_input()) ? kCGErrorSuccess : CGWarpMouseCursorPosition(CGPointMake(xy[0], xy[1]));
+        if (lp32_profile()->title == LP32_TITLE_GANGSTAR) note_mouse_warp(CGPointMake(xy[0], xy[1]));
+        if (background_test_mode() || lp32_suppress_background_input()) {
+            *result = kCGErrorSuccess;
+        } else if (lp32_profile()->title == LP32_TITLE_GANGSTAR) {
+            /* Gangstar re-centres the cursor after every move while the
+               mouse steers the camera.  A warp suppresses local mouse input
+               for the 0.25 s default interval, which dropped most of the
+               movement; warp without it, as SDL does. */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            CGSetLocalEventsSuppressionInterval(0);
+            *result = CGWarpMouseCursorPosition(CGPointMake(xy[0], xy[1]));
+            CGSetLocalEventsSuppressionInterval(0.25);
+#pragma clang diagnostic pop
+        } else {
+            *result = CGWarpMouseCursorPosition(CGPointMake(xy[0], xy[1]));
+        }
         return 1;
     }
     if (LP32_NAME_IS(import_name, import_length, "_CGDisplayMoveCursorToPoint")) {

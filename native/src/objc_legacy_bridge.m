@@ -142,6 +142,13 @@ static void forward(id self,SEL command,NSInvocation *inv){
          !strcmp(selector, "applicationWillResignActive:") ||
          !strcmp(selector, "applicationDidResignActive:"))) return;
     if(getenv("LP32_TRACE_OBJC_SELECTORS"))fprintf(stderr,"compat32: native callback %s on %s\n",selector,class_getName(object_getClass(self)));
+    /* Gangstar's camera reads these moves' deltas (CGGetLastMouseDelta). */
+    if (lp32_profile()->title == LP32_TITLE_GANGSTAR &&
+        (!strcmp(selector, "mouseMoved:") || !strcmp(selector, "mouseDragged:"))) {
+        void *event = NULL;
+        [inv getArgument:&event atIndex:2];
+        if (event) objc_bridge32_note_mouse_event(event);
+    }
     uint32_t a[128]={objc_bridge32_guest_object(self),m->name};unsigned n=2;
     NSMethodSignature *sig=inv.methodSignature;
     for(NSUInteger i=2;i<sig.numberOfArguments;++i){

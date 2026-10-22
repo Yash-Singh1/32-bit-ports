@@ -100,6 +100,15 @@ build/Gangstar-Converter.app/Contents/MacOS/GangstarConverter --convert SOURCE O
   display's modes and reads past its list when it is missing (a resolution
   saved on the built-in panel, then an external main display), so the saved
   resolution is offered as a mode of the current display.
+- **Mouse look:** in gameplay the game re-centres the cursor with
+  `CGWarpMouseCursorPosition` after every move and turns the camera by
+  `CGGetLastMouseDelta` times its sensitivity setting. That turned the camera
+  very little, whatever the setting: the warp can land in the next event's
+  delta (GLFW subtracts its own warps for this reason), and each warp
+  suppresses local mouse input for 0.25 s by default. The loader works out the
+  movement from the positions of the moves the view handles (from the warp
+  target after a warp), sums it until the game reads it, and warps without
+  the suppression, as SDL does.
 - **Other bridges:** object out-parameters (`NSError **`) get a host slot. When
   the game passes an object as its own `error:` slot (its IGP cache write), the
   error is dropped instead of AppKit writing into that object. IOKit matching
@@ -123,7 +132,10 @@ LP32_TEST_KEY_FIFO=/tmp/keys LP32_AGL_CAPTURE_FRAME=/tmp/frame LP32_AGL_CAPTURE_
 ```
 
 Write `KEYCODE HOLD_SECONDS [MODIFIERS [X Y]]` lines (macOS virtual key codes;
-1000–1002 are left/right/other clicks at window point X,Y) to the FIFO. Frames
+1000–1002 are left/right/other clicks at window point X,Y; 1003 moves the mouse
+by X,Y points from where the game last warped it) to the FIFO. Unattended runs
+take mouse look only from these scripted moves, not the real mouse passing over
+their window. Frames
 are written as PPM. Set `LP32_GL_BACKEND=metal|apple` to choose the renderer when
 launching the executable directly. Finder launches use the app's
 `LSEnvironment`. `LP32_TEST_GANGSTAR_RESOLUTION=WxH@FRAME` changes the resolution

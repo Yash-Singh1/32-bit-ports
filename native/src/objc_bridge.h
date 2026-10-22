@@ -43,6 +43,7 @@ int objc_bridge32_run_gl_texture_self_test(void);
 void objc_bridge32_pin_event(uint32_t, int);
 int objc_bridge32_test_key_down(unsigned key);
 void objc_bridge32_install_test_input(void *window);
+void objc_bridge32_note_mouse_event(void *event);
 
 void objc_bridge32_note_agl_frame(void);
 void objc_bridge32_carbon_focus_changed(int active);
