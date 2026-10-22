@@ -983,6 +983,9 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN);
     install_guest_crash_diagnostics();
     compat_runtime32_set_diagnostic_sink(runtime_diagnostic_line);
+    if (getenv("LP32_DISPLAY_SELFTEST")) {
+        return objc_bridge32_run_display_self_test() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (getenv("LP32_FOCUS_SELFTEST")) {
         int expected = atoi(getenv("LP32_FOCUS_SELFTEST"));
         return objc_bridge32_run_focus_self_test(expected) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

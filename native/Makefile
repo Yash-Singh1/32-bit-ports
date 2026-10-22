@@ -291,6 +291,10 @@ test-macho-entry: $(BUILD_DIR)/test_macho_entry
 	./$(BUILD_DIR)/test_macho_entry
 
 .PHONY: test-objc-proxy
+.PHONY: test-display-bridge
+test-display-bridge: $(BUILD_DIR)/game_loader
+	env LP32_DISPLAY_SELFTEST=1 LP32_NO_DIAGNOSTIC_LOG=1 arch -x86_64 ./$(BUILD_DIR)/game_loader
+
 test-objc-proxy: $(BUILD_DIR)/game_loader
 	env LP32_OBJC_PROXY_SELFTEST=1 LP32_NO_DIAGNOSTIC_LOG=1 arch -x86_64 ./$(BUILD_DIR)/game_loader
 

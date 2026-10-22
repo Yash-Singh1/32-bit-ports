@@ -564,6 +564,12 @@ void carbon_ui_capture_gl_frame(NSOpenGLContext *context, uint64_t swaps) {
     CGLSetCurrentContext([context CGLContextObj]);
     GLint viewport[4], framebuffer, read_framebuffer, buffer, pack, alignment, row_length, skip_rows, skip_pixels;
     glGetIntegerv(GL_VIEWPORT, viewport);
+    if (getenv("LP32_AGL_CAPTURE_WHOLE_WINDOW")) {
+      NSView *view = context.view;
+      NSSize size = [view convertSizeToBacking:view.bounds.size];
+      viewport[0] = viewport[1] = 0;
+      viewport[2] = (GLint)size.width; viewport[3] = (GLint)size.height;
+    }
     glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &framebuffer);
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_framebuffer);
     glGetIntegerv(GL_READ_BUFFER, &buffer);
