@@ -6,6 +6,7 @@ import Foundation
 enum Gangstar {
     static let bundleID = "com.gameloft.gangstar2mac"
     static let title = "Gangstar: Miami Vindication"
+    static let converterName = "Gangstar Miami Vindication Converter"
     static let stem = "Gangstar"
 }
 
@@ -94,7 +95,7 @@ extension Converter {
         let gameImage = try machOSlice(Data(contentsOf: layout.image), cpu: 7)
         let loader = resources.appendingPathComponent("game_loader")
         guard fm.isExecutableFile(atPath: loader.path) else {
-            throw ConversionError.message("The converter is missing its game launcher. Use a complete copy of Gangstar-Converter.app.")
+            throw ConversionError.message("The converter is missing its game launcher. Use a complete copy of Gangstar-Miami-Vindication-Converter.app.")
         }
         try checkRosetta()
         let metal = useGLMetal ? try validateGLMetal() : nil

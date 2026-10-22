@@ -9,7 +9,7 @@ from package_glmetal import install, run, DEFAULT_BUILD
 
 
 def package(build, glmetal):
-    app = build / 'Gangstar-Converter.app'
+    app = build / 'Gangstar-Miami-Vindication-Converter.app'
     with tempfile.TemporaryDirectory(prefix='.gangstar-converter-', dir=build) as tmp:
         staged = Path(tmp) / app.name
         contents = staged / 'Contents'

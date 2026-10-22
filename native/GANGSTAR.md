@@ -46,7 +46,8 @@ conversion and never modifies the source. GLMetal comes from `GLMETAL_SOURCE`
 
 ## Converter app
 
-`make gangstar-converter` builds `build/Gangstar-Converter.app`. Drop in
+`make gangstar-converter` builds
+`build/Gangstar-Miami-Vindication-Converter.app`. Drop in
 `GangstarMV.app`, its folder or the `.dmg`, choose GLMetal (default) or Apple
 OpenGL, and choose an output folder. New conversions get numbered names, so an
 existing converted app and its saves are never replaced. The converter is
@@ -56,7 +57,7 @@ the two i386 runtime libraries, and later conversions, including COD ones,
 reuse that cache. For testing without the GUI:
 
 ```sh
-build/Gangstar-Converter.app/Contents/MacOS/GangstarConverter --convert SOURCE OUTPUT_FOLDER [--apple-gl] [--cache DIR]
+build/Gangstar-Miami-Vindication-Converter.app/Contents/MacOS/GangstarConverter --convert SOURCE OUTPUT_FOLDER [--apple-gl] [--cache DIR]
 ```
 
 ## How it runs
