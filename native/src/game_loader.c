@@ -4,6 +4,7 @@
 #include "cxx_exception_bridge.h"
 #include "carbon_bridge.h"
 #include "controller_bridge.h"
+#include "asphalt6_controller.h"
 #include "game_profile.h"
 #include "macho_loader.h"
 #include "objc_bridge.h"
@@ -1072,6 +1073,11 @@ int main(int argc, char **argv)
         macho_image32_unload(&image);
         return result ? EXIT_FAILURE : EXIT_SUCCESS;
     }
+    if (getenv("LP32_ASPHALT6_FLOAT_SELFTEST")) {
+        int result = asphalt6_controller32_float_self_test();
+        macho_image32_unload(&image);
+        return result ? EXIT_FAILURE : EXIT_SUCCESS;
+    }
     if (getenv("LP32_ONCE_SELFTEST")) {
         int result = compat_runtime32_run_sync_self_test();
         macho_image32_unload(&image);
@@ -1276,7 +1282,7 @@ int main(int argc, char **argv)
         macho_image32_unload(&image);
         return EXIT_FAILURE;
     }
-    if (controller_bridge32_install() != 0) {
+    if (controller_bridge32_install(image_path) != 0) {
         macho_image32_unload(&image);
         return EXIT_FAILURE;
     }

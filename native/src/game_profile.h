@@ -81,6 +81,15 @@ struct lp32_code_patch {
     const char *reason;
 };
 
+/* Asphalt 6's Cocoa input and digital-steering call sites, guarded by the
+   original executable's SHA-256 as well as mapped instruction signatures. */
+struct lp32_asphalt6_controller_layout {
+    const char *sha256;
+    struct lp32_code_signature commit_call, steering_call;
+    uint32_t commit, digital_steering, steering_limit, steering_maximum;
+    uint32_t stack_pointer_slot, stack_top, race_name;
+};
+
 /* Apple HID Utilities globals/functions and the input manager layout that
    controller_bridge.m recreates and hooks. */
 struct lp32_controller_layout {
@@ -235,6 +244,7 @@ struct lp32_game_profile {
     uint32_t license_log_return_address; /* omit the original SDK key's puts */
     const struct lp32_startup_latch_patch *startup_latch;
     const struct lp32_controller_layout *controller;
+    const struct lp32_asphalt6_controller_layout *asphalt6_controller;
     const struct lp32_button_font_layout *button_font; /* NULL = Xbox glyphs only */
     const struct lp32_save_worker_patch *save_worker;  /* NULL = single init */
     const struct lp32_texture_bind_guard *texture_bind_guard; /* NULL = none */

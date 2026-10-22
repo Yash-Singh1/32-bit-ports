@@ -110,6 +110,50 @@ in EDX, which the race clock uses.
 Settings use `com.gameloft.asphalt6mac.compat`. The generated app logs to
 `~/Library/Logs/Asphalt6Compat/last-run.log`.
 
+## Controllers
+
+Source builds include experimental controller support for the original Mac
+1.0.9 executable. The published Dev 2 converter predates this implementation.
+Rebuild the converter or use `make -C native GAME=asphalt6 promote-loader`
+to update an existing development app. The adapter uses the first connected
+device with a GameController.framework extended gamepad profile.
+
+- Left stick steers proportionally, with an 18% dead zone. D-pad Left/Right
+  uses the game's digital steering.
+- RT accelerates; LT brakes. Triggers are digital for now and retain the
+  game's existing auto-acceleration setting.
+- LB or RB holds the Space/nitro action.
+- X cycles camera presets forward; Y cycles backward.
+- Start/Menu, Back/Options, or B sends Escape for pause/back.
+- Right stick moves an in-game cursor. A clicks at that cursor.
+- Outside active racing, including pause, the left stick and D-pad also move
+  the cursor. Coordinates follow the current view and window size.
+
+Keyboard and controller holds combine, so releasing a trigger cannot release
+an arrow key still held on the keyboard. Short presses and releases span
+separate input commits. Camera/back actions also serialize with each other
+because the game processes only one of their releases per update.
+Disconnect clears controller input; focus loss clears buffered input and
+releases held actions. Physical controller input requires an active app and
+key game window, even when background rendering is enabled.
+
+Analog steering retains the original digital routine's bookkeeping and the
+shared physics setter. It applies only to the local keyboard-controlled car
+in digital steering mode. Drift and reverse retain the original digital path.
+Controller feel and these transitions still need an in-game hardware check.
+
+`LP32_ASPHALT6_ANALOG_STEERING=0` selects digital stick steering.
+`LP32_ASPHALT6_CONTROLLERS=0` disables this adapter and both hooks.
+`LP32_TRACE_CONTROLLERS=1` logs device connections and delivered actions.
+An unrecognized executable hash or changed call-site instructions disables
+the hooks and keeps the original keyboard/mouse handling.
+
+Run `make -C native test-asphalt6-controller` for windowless input and Cocoa
+event tests, plus a synthetic i386 fixture that checks nested x87 returns,
+stack alignment, and float-stack balance. These tests use no game code or
+assets. See [the controller research](ASPHALT6-CONTROLLERS.md) for addresses
+and the Windows implementation comparison.
+
 ## Validation
 
 Experimental. Background, muted probes on macOS 26.5.2 and an Apple M5 Pro
@@ -164,7 +208,7 @@ The display API rules follow [Apple's NSScreen reference](https://developer.appl
 and [Quartz display documentation](https://developer.apple.com/library/archive/documentation/GraphicsImaging/Conceptual/QuartzDisplayServicesConceptual/Articles/Overview.html).
 
 GLMetal plays the movies but still rejects some legacy material shaders, so
-it remains an opt-in experiment. Audio playback, controllers, multiplayer,
+it remains an opt-in experiment. Audio playback, physical-controller gameplay, multiplayer,
 full races and long sessions remain unverified. Some rendering still needs
 visual review, including dark car paint in races and a narrow corrupt strip
 at the top of captured frames. The Mac App Store receipt

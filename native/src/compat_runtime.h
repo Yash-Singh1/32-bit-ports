@@ -8,11 +8,15 @@
 #include <stdint.h>
 
 uint64_t compat_runtime32_return_double(double value);
+uint64_t compat_runtime32_return_float(float value);
 int compat_runtime32_initialize(struct macho_image32 *image);
 /* The loaded guest image (valid after compat_runtime32_initialize). */
 const struct macho_image32 *compat_runtime32_image(void);
 uint32_t compat_runtime32_call(uint32_t function, const uint32_t *arguments,
                                size_t argument_count);
+/* Consume a guest float from x87 ST(0) before any other host work. */
+float compat_runtime32_call_float(uint32_t function, const uint32_t *arguments,
+                                  size_t argument_count);
 int compat_runtime32_last_call_trapped(void);
 /* edx of the last compat_runtime32_call on this thread (pair results). */
 uint32_t compat_runtime32_last_call_edx(void);

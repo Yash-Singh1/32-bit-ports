@@ -673,12 +673,25 @@ static const struct lp32_game_profile gangstar_profile = {
 
 /* Asphalt 6 1.0.9 uses the same Cocoa/llvm-gcc ABI, with GLSL rendering
    and native Cocoa input rather than Gangstar's SDL event pump. */
+static const struct lp32_asphalt6_controller_layout asphalt6_controller = {
+    .sha256 = "8ce20892c7bf360a4bc71e29b8e32976c40081558db50788e29da9a59a1a6407",
+    .commit_call = {0x000bbb88, {0xe8, 0x63, 0xd0, 0xff, 0xff}, 5},
+    .steering_call = {0x001e81e3, {0xe8, 0x38, 0xdc, 0xff, 0xff}, 5},
+    .commit = 0x000b8bf0,
+    .digital_steering = 0x001e5e20,
+    .steering_limit = 0x001e5b90,
+    .steering_maximum = 0x000d3ca0,
+    .stack_pointer_slot = 0x00705860,
+    .stack_top = 0x000c8a60,
+    .race_name = 0x000c86f0,
+};
 static const struct lp32_game_profile asphalt6_profile = {
     .title = LP32_TITLE_ASPHALT6,
     .name = "Asphalt6",
     .display_name = "Asphalt 6: Adrenaline",
     .log_directory = "Asphalt6Compat",
     .image_file = "Asphalt6.image",
+    .asphalt6_controller = &asphalt6_controller,
     .callee_pops_struct_return = 1,
     .thread_argument_is_direct = 1,
 };

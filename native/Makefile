@@ -249,7 +249,7 @@ $(BUILD_DIR)/mode32_probe: src/mode32_probe.c src/mode32_switch.S src/address_sp
 	$(CLANG) $(CFLAGS) $(LDFLAGS) $^ -o $@
 	codesign --force --sign - $@
 
-$(BUILD_DIR)/game_loader: src/game_loader.c src/guest_context.S src/guest_dyld.c src/macho_file.c src/hitch_recorder.c src/game_profile.c src/macho_loader.c src/compat_runtime.c src/guest_once.c src/audio_bridge.c src/audio_converter_bridge.c src/sound_manager_bridge.c src/audio_queue_bridge.c src/time_manager_bridge.c src/openal_bridge.c src/hid_bridge.c src/dispatch_bridge.m src/dlfcn_bridge.c src/gl_core_bridge.c src/asphalt_glsl.c src/curl_bridge.c src/steam_bridge.c src/steam_storage_fix.c src/resource_bridge.c src/stl_bridge.c src/libcpp_bridge.c src/libcpp_future_bridge.c src/cxx_exception_bridge.c src/libcpp_stream_bridge.cpp src/tlv_bridge.c src/blocks_bridge.c src/socket_bridge.c src/zlib_bridge.c src/sdl_bridge.m src/qtkit_bridge.m src/regex_bridge.c src/iconv_bridge.c src/rtti_bridge.c src/carbon_bridge.c src/carbon_text.m src/carbon_ui.m src/cfnetwork_bridge.c src/crypto_bridge.c src/quicktime_bridge.m src/controller_bridge.m src/objc_bridge.m src/objc_legacy_bridge.m src/arb_program_guard.c src/arb_sampler_usage.c src/gl_backend.c $(BUILD_DIR)/gl_dispatch.S src/mode32_switch.S src/import_gateway.S src/address_space_reserve.S $(wildcard src/*.h) $(BUILD_DIR)/gl_dispatch_names.h | $(BUILD_DIR)
+$(BUILD_DIR)/game_loader: src/game_loader.c src/guest_context.S src/guest_dyld.c src/macho_file.c src/hitch_recorder.c src/game_profile.c src/macho_loader.c src/compat_runtime.c src/guest_once.c src/audio_bridge.c src/audio_converter_bridge.c src/sound_manager_bridge.c src/audio_queue_bridge.c src/time_manager_bridge.c src/openal_bridge.c src/hid_bridge.c src/dispatch_bridge.m src/dlfcn_bridge.c src/gl_core_bridge.c src/asphalt_glsl.c src/curl_bridge.c src/steam_bridge.c src/steam_storage_fix.c src/resource_bridge.c src/stl_bridge.c src/libcpp_bridge.c src/libcpp_future_bridge.c src/cxx_exception_bridge.c src/libcpp_stream_bridge.cpp src/tlv_bridge.c src/blocks_bridge.c src/socket_bridge.c src/zlib_bridge.c src/sdl_bridge.m src/qtkit_bridge.m src/regex_bridge.c src/iconv_bridge.c src/rtti_bridge.c src/carbon_bridge.c src/carbon_text.m src/carbon_ui.m src/cfnetwork_bridge.c src/crypto_bridge.c src/quicktime_bridge.m src/controller_bridge.m src/asphalt6_controller.m src/asphalt6_input.c src/cocoa_input.m src/objc_bridge.m src/objc_legacy_bridge.m src/arb_program_guard.c src/arb_sampler_usage.c src/gl_backend.c $(BUILD_DIR)/gl_dispatch.S src/mode32_switch.S src/import_gateway.S src/address_space_reserve.S $(wildcard src/*.h) $(BUILD_DIR)/gl_dispatch_names.h | $(BUILD_DIR)
 	$(CLANG) $(CFLAGS) -I$(BUILD_DIR) $(LDFLAGS) $(filter %.c %.m %.cpp %.S,$^) -lc++ -lffi -lcurl -lz -liconv -framework CoreText -framework Security -framework ForceFeedback -framework OpenAL -framework CFNetwork -framework SystemConfiguration -framework AVFoundation -framework CoreMedia -framework CoreVideo -framework Cocoa -framework Carbon -framework AudioToolbox -framework AudioUnit -framework CoreAudio -framework GameController -framework IOKit -o $@
 	codesign --force --sign - $@
 
@@ -266,6 +266,18 @@ $(BUILD_DIR)/test_game_profile: tests/test_game_profile.c src/game_profile.c src
 
 test-game-profile: $(BUILD_DIR)/test_game_profile
 	./$(BUILD_DIR)/test_game_profile
+
+.PHONY: test-asphalt6-controller
+$(BUILD_DIR)/test_asphalt6_input: tests/test_asphalt6_input.c src/asphalt6_input.c src/asphalt6_input.h | $(BUILD_DIR)
+	$(CLANG) $(CFLAGS) -Isrc tests/test_asphalt6_input.c src/asphalt6_input.c -o $@
+
+$(BUILD_DIR)/test_cocoa_input: tests/test_cocoa_input.m src/cocoa_input.m src/cocoa_input.h | $(BUILD_DIR)
+	$(CLANG) $(CFLAGS) -Isrc tests/test_cocoa_input.m src/cocoa_input.m -framework Cocoa -o $@
+
+test-asphalt6-controller: $(BUILD_DIR)/test_asphalt6_input $(BUILD_DIR)/test_cocoa_input $(BUILD_DIR)/game_loader
+	./$(BUILD_DIR)/test_asphalt6_input
+	./$(BUILD_DIR)/test_cocoa_input
+	python3 tests/test_asphalt6_float.py
 
 .PHONY: test-focus-policy
 $(BUILD_DIR)/test_focus_policy: tests/test_focus_policy.m src/focus_policy.m src/focus_policy.h | $(BUILD_DIR)

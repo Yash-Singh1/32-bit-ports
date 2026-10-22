@@ -4,6 +4,7 @@
 #include "focus_policy.h"
 #include "compat_runtime.h"
 #include "game_profile.h"
+#include "asphalt6_controller.h"
 #include "gl_backend.h"
 #define GL_SILENCE_DEPRECATION 1
 #import <AppKit/AppKit.h>
@@ -136,6 +137,20 @@ static void forward(id self,SEL command,NSInvocation *inv){
     bool meta=class_isMetaClass(object_getClass(self));
     const char *selector=sel_getName(inv.selector);struct method32 *m=method(meta?(Class)self:object_getClass(self),meta,selector);
     if(!m){[self doesNotRecognizeSelector:inv.selector];return;}
+    if (lp32_profile()->asphalt6_controller) {
+        if (!strcmp(selector, "windowDidResignKey:") ||
+            !strcmp(selector, "applicationWillResignActive:") ||
+            !strcmp(selector, "applicationDidResignActive:"))
+            asphalt6_controller32_focus_lost();
+        if ((!strcmp(selector, "keyDown:") || !strcmp(selector, "keyUp:") ||
+             !strcmp(selector, "mouseDown:") || !strcmp(selector, "mouseUp:") ||
+             !strcmp(selector, "mouseMoved:") || !strcmp(selector, "mouseDragged:")) &&
+            [self isKindOfClass:NSClassFromString(@"EAGLView")]) {
+            id event = nil;
+            [inv getArgument:&event atIndex:2];
+            if (asphalt6_controller32_event(self, selector, event)) return;
+        }
+    }
     if (lp32_ignore_guest_focus_loss() &&
         (!strcmp(selector, "windowDidResignKey:") ||
          !strcmp(selector, "windowDidResignMain:") ||

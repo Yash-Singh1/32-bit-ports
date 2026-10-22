@@ -27,6 +27,7 @@
 
 #define GL_SILENCE_DEPRECATION 1
 #import <AppKit/AppKit.h>
+#include "cocoa_input.h"
 #import <IOKit/pwr_mgt/IOPMLib.h>
 #import <IOKit/graphics/IOGraphicsLib.h>
 #import <Carbon/Carbon.h>
@@ -2653,45 +2654,6 @@ static void install_gl_trace_signal(void)
     sigaction(SIGQUIT, &action, NULL);
 }
 
-static NSString *characters_for_test_key(unsigned short key_code)
-{
-    unichar character;
-    switch (key_code) {
-        case 36: return @"\r";
-        case 49: return @" ";
-        case 53: return @"\x1b";
-        case 32: return @"u";
-        case 1: return @"s";
-        case 2: return @"d";
-        case 13: return @"w";
-        case 12: return @"q";
-        case 123: character = NSLeftArrowFunctionKey; return [NSString stringWithCharacters:&character length:1];
-        case 124: character = NSRightArrowFunctionKey; return [NSString stringWithCharacters:&character length:1];
-        case 125: character = NSDownArrowFunctionKey; return [NSString stringWithCharacters:&character length:1];
-        case 126: character = NSUpArrowFunctionKey; return [NSString stringWithCharacters:&character length:1];
-        case 0: return @"a";
-        default: break;
-    }
-    /* The rest of the ANSI letters and digits by virtual key code, so
-       scripted game binds (F, G, K...) arrive with their characters. */
-    static const char ansi[] = {
-        [3] = 'f', [4] = 'h', [5] = 'g', [6] = 'z', [7] = 'x', [8] = 'c', [9] = 'v', [11] = 'b', [14] = 'e',
-        [15] = 'r', [16] = 'y', [17] = 't', [18] = '1', [19] = '2', [20] = '3', [21] = '4', [22] = '6', [23] = '5',
-        [25] = '9', [26] = '7', [28] = '8', [29] = '0', [31] = 'o', [34] = 'i', [35] = 'p', [37] = 'l', [38] = 'j',
-        [40] = 'k', [45] = 'n', [46] = 'm', [48] = '\t'};
-    if (key_code < sizeof ansi && ansi[key_code]) {
-        character = (unichar)ansi[key_code];
-        return [NSString stringWithCharacters:&character length:1];
-    }
-    switch (key_code) {
-        case 115: character = NSHomeFunctionKey; break;
-        case 119: character = NSEndFunctionKey; break;
-        case 116: character = NSPageUpFunctionKey; break;
-        case 121: character = NSPageDownFunctionKey; break;
-        default: return @"";
-    }
-    return [NSString stringWithCharacters:&character length:1];
-}
 
 static unsigned char test_key_states[128];
 int objc_bridge32_test_key_down(unsigned key) {
@@ -2773,7 +2735,6 @@ static void post_test_key_event_with_modifiers(NSWindow *window,
        state that the repair path samples. Used by the input regression run. */
     const char *drop_key = getenv("LP32_TEST_DROP_KEYUP");
     if (!is_down && drop_key && key_code == strtoul(drop_key, NULL, 0)) return;
-    NSString *characters = characters_for_test_key(key_code);
     /* Cocoa marks arrow keys as function/numeric-pad events. SDL uses
        these flags to distinguish them from ordinary character input. */
     if (key_code >= 123 && key_code <= 126)
@@ -2788,17 +2749,7 @@ static void post_test_key_event_with_modifiers(NSWindow *window,
         [NSApp postEvent:[NSEvent keyEventWithType:NSEventTypeFlagsChanged location:NSZeroPoint
             modifierFlags:modifiers timestamp:timestamp windowNumber:[window windowNumber] context:nil
             characters:@"" charactersIgnoringModifiers:@"" isARepeat:NO keyCode:55] atStart:NO];
-    NSEvent *event = [NSEvent
-        keyEventWithType:is_down ? NSEventTypeKeyDown : NSEventTypeKeyUp
-                 location:NSZeroPoint
-            modifierFlags:modifiers
-                timestamp:timestamp
-             windowNumber:[window windowNumber]
-                  context:nil
-               characters:characters
-      charactersIgnoringModifiers:characters
-                isARepeat:NO
-                  keyCode:key_code];
+    NSEvent *event = lp32_key_event(window, key_code, is_down, modifiers);
     /* MW2's SDL reads keys from the application queue in its event pump,
        before dispatch, so a key sent straight to the window never reaches it. */
     if (getenv("LP32_BACKGROUND_TEST") && objc_legacy32_token(window) && !sdl)
@@ -8887,7 +8838,7 @@ static void mw2_release_unheld_keys(uint32_t event_mask)
             (test_repair ? objc_bridge32_test_key_down(key) :
                 CGEventSourceKeyState(kCGEventSourceStateHIDSystemState, (CGKeyCode)key)))
             continue;
-        NSString *characters = characters_for_test_key(key);
+        NSString *characters = lp32_key_characters(key);
         NSEvent *up = [NSEvent keyEventWithType:NSEventTypeKeyUp
                     location:NSZeroPoint modifierFlags:0
                     timestamp:[[NSProcessInfo processInfo] systemUptime]
@@ -12591,6 +12542,8 @@ static int objc_bridge32_dispatch_body(const char *import_name,
                              [(NSOpenGLContext *)receiver CGLContextObj], __ATOMIC_RELAXED);
             uint64_t swaps = ++objc_bridge_swap_count;
             sdl_present_swap = swaps;
+            if (lp32_profile()->title == LP32_TITLE_ASPHALT6)
+                controller_bridge32_poll(swaps);
             if (swaps == 1) {
                 fprintf(stderr, "compat32: %s presented its first frame\n", lp32_profile()->name);
                 if (getenv("LP32_TRACE_GL_RENDER") ||

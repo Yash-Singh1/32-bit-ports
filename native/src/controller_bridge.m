@@ -1,4 +1,5 @@
 #include "controller_bridge.h"
+#include "asphalt6_controller.h"
 #include "compat_runtime.h"
 #include "game_profile.h"
 
@@ -1345,8 +1346,10 @@ static void trace_game_controller_states(uint64_t swap_count)
     }
 }
 
-int controller_bridge32_install(void)
+int controller_bridge32_install(const char *image_path)
 {
+    if (lp32_profile()->asphalt6_controller)
+        return asphalt6_controller32_install(image_path);
     if (bridge_installed) return 0;
     layout = lp32_profile()->controller;
     if (!layout) {
@@ -1396,6 +1399,10 @@ int controller_bridge32_install(void)
 
 void controller_bridge32_poll(uint64_t swap_count)
 {
+    if (lp32_profile()->asphalt6_controller) {
+        asphalt6_controller32_poll();
+        return;
+    }
     if (!bridge_installed) return;
     keep_glyph_provider();
     if (!virtual_controller_count) refresh_hardware_slots();

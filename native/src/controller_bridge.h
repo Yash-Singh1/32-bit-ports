@@ -3,9 +3,9 @@
 
 #include <stdint.h>
 
-/* Install the app-specific legacy HID device backend after the i386 image and
-   import bridge have been initialized. */
-int controller_bridge32_install(void);
+/* Install the title's controller backend after image/import initialization.
+   Asphalt checks image_path before applying its version-specific hooks. */
+int controller_bridge32_install(const char *image_path);
 
 /* Refresh connected devices and their current element values once per frame. */
 void controller_bridge32_poll(uint64_t swap_count);

@@ -9,6 +9,7 @@
 #include "openal_bridge.h"
 #include "curl_bridge.h"
 #include "controller_bridge.h"
+#include "asphalt6_controller.h"
 #include "game_profile.h"
 #include "steam_bridge.h"
 #include "resource_bridge.h"
@@ -3137,6 +3138,7 @@ static uint64_t return_guest_double(double value)
 }
 
 uint64_t compat_runtime32_return_double(double value) { return return_guest_double(value); }
+uint64_t compat_runtime32_return_float(float value) { return return_guest_float(value); }
 
 /* Set by the guest's pthread_exit, which leaves guest code like a trapped
    import does; run_guest_thread then finishes the host thread normally. */
@@ -4510,6 +4512,10 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
     }
     dispatch_name_length = strlen(name);
     dispatch_name_matched = false;
+    if (!strcmp(name, kAsphalt6CommitCallback))
+        return asphalt6_controller32_commit(arguments);
+    if (!strcmp(name, kAsphalt6SteeringCallback))
+        return compat_runtime32_return_float(asphalt6_controller32_steer(arguments));
     if (!strcmp(name, "_lp32_trace_print")) {
         uint32_t text = arguments[trace_print_argument];
         if (text >= 0x1000 && text < 0x7f000000) {
@@ -6806,8 +6812,8 @@ static bool acquire_guest_stack_slot(void)
     return true;
 }
 
-uint32_t compat_runtime32_call(uint32_t function, const uint32_t *arguments,
-                               size_t argument_count)
+static uint32_t call_guest(uint32_t function, const uint32_t *arguments,
+                           size_t argument_count, float *float_result)
 {
     const uintptr_t stack_slice_size = 0x10000;
     if (guest_thread_slot == UINT32_MAX && !acquire_guest_stack_slot()) {
@@ -6842,10 +6848,26 @@ uint32_t compat_runtime32_call(uint32_t function, const uint32_t *arguments,
     ++guest_call_depth;
     lp32_guest_execution_enter();
     uint64_t pair = run_compat32(lp32_landing32, (uint32_t)sp, lp32_cs32);
+    if (float_result && !last_call_trapped)
+        __asm__ volatile("fstps %0" : "=m"(*float_result) : : "st");
     lp32_guest_execution_leave();
     --guest_call_depth;
     last_call_edx = (uint32_t)(pair >> 32);
     return (uint32_t)pair;
+}
+
+uint32_t compat_runtime32_call(uint32_t function, const uint32_t *arguments,
+                               size_t argument_count)
+{
+    return call_guest(function, arguments, argument_count, NULL);
+}
+
+float compat_runtime32_call_float(uint32_t function, const uint32_t *arguments,
+                                  size_t argument_count)
+{
+    float result = 0;
+    call_guest(function, arguments, argument_count, &result);
+    return result;
 }
 
 int compat_runtime32_last_call_trapped(void)

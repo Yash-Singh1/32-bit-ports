@@ -124,6 +124,9 @@ int main(void)
     assert(asphalt->title == LP32_TITLE_ASPHALT6);
     assert(asphalt->callee_pops_struct_return && asphalt->thread_argument_is_direct);
     assert(!asphalt->code_patches && !asphalt->controller && !asphalt->steam_app_id);
+    assert(asphalt->asphalt6_controller && !gangstar->asphalt6_controller);
+    assert(asphalt->asphalt6_controller->commit_call.length == 5);
+    assert(asphalt->asphalt6_controller->steering_call.length == 5);
     assert(lp32_title_is_gameloft(asphalt->title) && lp32_title_is_gameloft(gangstar->title));
     assert(!lp32_title_is_gameloft(LP32_TITLE_MARVEL));
     assert(!lp32_title_is_mw_sdl(asphalt->title) && !lp32_title_is_cod_carbon(asphalt->title));
