@@ -313,6 +313,10 @@ test-macho-mapping: $(BUILD_DIR)/test_macho_mapping $(BUILD_DIR)/test_macho_miss
 test-crash-diagnostics: $(BUILD_DIR)/game_loader
 	python3 tests/test_crash_diagnostics.py $(BUILD_DIR)/game_loader
 
+.PHONY: test-display-bridge
+test-display-bridge: $(BUILD_DIR)/game_loader
+	env LP32_DISPLAY_SELFTEST=1 LP32_NO_DIAGNOSTIC_LOG=1 arch -x86_64 ./$(BUILD_DIR)/game_loader
+
 .PHONY: test-objc-proxy
 test-objc-proxy: $(BUILD_DIR)/game_loader
 	env LP32_OBJC_PROXY_SELFTEST=1 LP32_NO_DIAGNOSTIC_LOG=1 arch -x86_64 ./$(BUILD_DIR)/game_loader

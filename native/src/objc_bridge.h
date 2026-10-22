@@ -17,6 +17,7 @@ int objc_bridge32_dispatch(const char *import_name, const uint32_t *arguments,
 lp32_fast_import_fn objc_bridge32_fast_import(const char *import_name);
 uint32_t objc_bridge32_pointer_import(const char *import_name);
 int objc_bridge32_run_proxy_self_test(void);
+int objc_bridge32_run_display_self_test(void);
 int objc_bridge32_run_pointer_self_test(void);
 int objc_bridge32_run_dispatch_fast_self_test(void);
 int objc_bridge32_run_event_monitor_self_test(void);
@@ -24,6 +25,7 @@ int objc_bridge32_run_app_event_delivery_self_test(void);
 int objc_bridge32_run_focus_self_test(int expected);
 int objc_bridge32_run_date_formatter_self_test(void);
 void objc_bridge32_initialize_test_mode(void);
+void objc_bridge32_capture_launch_display(void);
 int objc_bridge32_prepare_shader_cache(void);
 float objc_bridge32_preferred_display_aspect_ratio(void);
 struct lp32_screen_aspect_patch;

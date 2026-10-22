@@ -62,6 +62,15 @@ The generated compatibility app appears in `native/build/`. The build copies
 in the game's data and resources and leaves the original app unchanged.
 Open the generated app from Finder or the Dock.
 
+Fullscreen launch placement records the frontmost app's visible window before
+game initialization, then falls back to the display under the pointer. Later
+fullscreen frame changes keep the game on its current display. The Cocoa bridge queries
+[`NSScreen.mainScreen`](https://developer.apple.com/documentation/appkit/nsscreen/main)
+on each call. Quartz's primary display stays independent of the game window,
+and emulated display modes retain the selected display's desktop origin.
+`LP32_DISPLAY_INDEX`, `LP32_TEST_DISPLAY` and `LP32_USE_SECONDARY_DISPLAY`
+remain explicit display overrides for test launches.
+
 Batman 3, The LEGO Movie, and The Hobbit default to their standard Steam
 library locations when `GAME` is specified without `SOURCE_APP`. For other
 install locations, pass `SOURCE_APP` explicitly. To check game detection before
@@ -94,3 +103,14 @@ Startup diagnostics are saved to `~/Library/Logs/LP32Compat/startup.log`
 before the game image loads. After loading, the session log is in the game's
 log directory, such as `~/Library/Logs/LEGOCloneWarsCompat/last-run.log`.
 Include these logs when reporting a launch failure.
+
+Display regression checks can run without loading a game or changing the
+system display layout:
+
+```sh
+make -C native test-display-bridge
+```
+
+The check exercises changing Cocoa focus, Quartz primary-display queries,
+launch placement, fullscreen window moves, and emulated mode isolation on
+all attached displays.

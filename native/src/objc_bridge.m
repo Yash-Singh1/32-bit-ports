@@ -1909,14 +1909,11 @@ static bool invoke_simple_message(id receiver, const char *selector_name,
 - (BOOL)canBecomeKeyWindow { return YES; }
 @end
 
-/*
- * The game runs on the main display, as the shipped build does.  AppKit orders
- * NSScreen objects with the menu-bar display first, but identify the primary
- * by display ID rather than relying on that ordering.  Test launches set
- * LP32_USE_SECONDARY_DISPLAY=1 to keep the game off the operator's workspace
- * when another display is connected; LP32_DISPLAY_INDEX selects an explicit
- * zero-based entry from [NSScreen screens].
- */
+/* Explicit compatibility/test overrides are separate from native semantics:
+   NSScreen.mainScreen follows AppKit's keyboard focus, while CGMainDisplayID
+   identifies the desktop's primary display. Re-resolve each time, including
+   overrides, so focus changes and disconnected displays cannot leave a stale
+   NSScreen cached for the lifetime of the process. */
 static CGDirectDisplayID display_id_for_screen(NSScreen *screen)
 {
     NSNumber *number = screen ?
@@ -1924,88 +1921,143 @@ static CGDirectDisplayID display_id_for_screen(NSScreen *screen)
     return number ? (CGDirectDisplayID)[number unsignedIntValue] : 0;
 }
 
-static NSScreen *preferred_game_screen(void)
+static NSScreen *screen_for_display(CGDirectDisplayID display)
 {
-    static bool resolved;
-    static NSScreen *screen;
-    /* A display can become the main display or the game window can move
-       after launch. Use the screen that is actually showing the GL view. */
-    if (presenting_view && [NSThread isMainThread]) {
-        NSScreen *current = [[(NSView *)presenting_view window] screen];
-        if (current) {
-            static CGDirectDisplayID last_view_display;
-            CGDirectDisplayID display = display_id_for_screen(current);
-            if (display != last_view_display) {
-                NSRect frame = [current frame];
-                fprintf(stderr,
-                        "compat32: game view display id=%u frame=%.0f,%.0f %.0fx%.0f\n",
-                        display, frame.origin.x, frame.origin.y,
-                        frame.size.width, frame.size.height);
-                last_view_display = display;
-            }
-            return current;
-        }
-    }
-    if (resolved) return screen;
+    for (NSScreen *screen in NSScreen.screens)
+        if (display_id_for_screen(screen) == display) return screen;
+    return nil;
+}
 
+static NSScreen *explicit_game_screen(void)
+{
+    const char *test_display = getenv("LP32_TEST_DISPLAY");
+    const char *index_text = getenv("LP32_DISPLAY_INDEX");
+    bool secondary = getenv("LP32_USE_SECONDARY_DISPLAY") != NULL;
+    /* Ordinary Quartz calls must not initialize AppKit or enumerate screens. */
+    if ((!test_display || !*test_display) && (!index_text || !*index_text) && !secondary) return nil;
     NSArray *screens = [NSScreen screens];
     NSUInteger count = [screens count];
     CGDirectDisplayID primary_id = CGMainDisplayID();
-    const char *test_display = getenv("LP32_TEST_DISPLAY");
     if (test_display && test_display[0]) {
         CGDirectDisplayID requested=(CGDirectDisplayID)strtoul(test_display,NULL,0);
         for(NSScreen *candidate in screens) {
-            if(display_id_for_screen(candidate)==requested){screen=[candidate retain];break;}
+            if(display_id_for_screen(candidate)==requested)return candidate;
         }
     }
-    const char *index_text = getenv("LP32_DISPLAY_INDEX");
-    if (!screen && index_text && index_text[0]) {
+    if (index_text && index_text[0]) {
         char *end = NULL;
         unsigned long index = strtoul(index_text, &end, 10);
         if (end && *end == '\0' && index < count) {
-            screen = [[screens objectAtIndex:(NSUInteger)index] retain];
+            return [screens objectAtIndex:(NSUInteger)index];
         }
     }
-    if (!screen && getenv("LP32_USE_SECONDARY_DISPLAY")) {
+    if (secondary) {
         for (NSScreen *candidate in screens) {
             CGDirectDisplayID candidate_id = display_id_for_screen(candidate);
             if (candidate_id && candidate_id != primary_id) {
-                screen = [candidate retain];
-                break;
+                return candidate;
             }
         }
     }
-    if (!screen) {
-        for (NSScreen *candidate in screens) {
-            if (display_id_for_screen(candidate) == primary_id) {
-                screen = [candidate retain];
-                break;
-            }
-        }
-    }
-    if (!screen) screen = [[NSScreen mainScreen] retain];
-    if (!screen && count) screen = [[screens objectAtIndex:0] retain];
-    resolved = true;
+    return nil;
+}
 
-    NSRect frame = screen ? [screen frame] : NSZeroRect;
-    NSUInteger selected_index = screen ? [screens indexOfObjectIdenticalTo:screen] :
-                                         NSNotFound;
-    fprintf(stderr,
-            "compat32: selected game display id=%u index=%ld/%lu "
-            "frame=%.0f,%.0f %.0fx%.0f primary=%u%s\n",
-            display_id_for_screen(screen),
-            selected_index == NSNotFound ? -1L : (long)selected_index,
-            (unsigned long)count, frame.origin.x, frame.origin.y,
-            frame.size.width, frame.size.height, primary_id,
-            display_id_for_screen(screen) == primary_id ? " (primary fallback)" :
-                                                          " (secondary)");
-    return screen;
+static NSScreen *preferred_game_screen(void)
+{
+    return explicit_game_screen() ?: [NSScreen mainScreen];
 }
 
 static CGDirectDisplayID preferred_game_display_id(void)
 {
-    CGDirectDisplayID display = display_id_for_screen(preferred_game_screen());
+    CGDirectDisplayID display = display_id_for_screen(explicit_game_screen());
     return display ? display : CGMainDisplayID();
+}
+
+static NSScreen *screen_for_foreground_window(NSArray *windows, pid_t owner)
+{
+    /* Quartz window bounds and CGDisplayBounds use the same desktop space,
+       including displays to the left/above the primary one. No screenshot,
+       window title or Accessibility permission is needed for these keys. */
+    for (NSDictionary *window in windows) {
+        if ([window[(id)kCGWindowOwnerPID] intValue] != owner ||
+            [window[(id)kCGWindowLayer] intValue] != 0 ||
+            [window[(id)kCGWindowAlpha] doubleValue] <= 0) continue;
+        CGRect bounds;
+        if (!CGRectMakeWithDictionaryRepresentation((CFDictionaryRef)window[(id)kCGWindowBounds], &bounds)) continue;
+        NSScreen *best = nil;
+        CGFloat area = 0;
+        for (NSScreen *screen in NSScreen.screens) {
+            CGRect overlap = CGRectIntersection(bounds, CGDisplayBounds(display_id_for_screen(screen)));
+            CGFloat size = CGRectIsNull(overlap) ? 0 : overlap.size.width * overlap.size.height;
+            if (size > area) { area = size; best = screen; }
+        }
+        if (best) return best;
+    }
+    return nil;
+}
+
+static NSScreen *initial_game_screen(void)
+{
+    NSScreen *screen = explicit_game_screen();
+    if (screen) return screen;
+    pid_t owner = NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;
+    if (getenv("LP32_TRACE_DISPLAY"))
+        fprintf(stderr, "compat32: game launch foreground=%d self=%d\n", owner, getpid());
+    if (owner && owner != getpid()) {
+        CFArrayRef windows = CGWindowListCopyWindowInfo(
+            kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+        screen = screen_for_foreground_window((NSArray *)windows, owner);
+        if (getenv("LP32_TRACE_DISPLAY"))
+            fprintf(stderr, "compat32: game foreground window display=%u\n", display_id_for_screen(screen));
+        if (windows) CFRelease(windows);
+        if (screen) return screen;
+    }
+    CGEventRef event = CGEventCreate(NULL);
+    if (event) {
+        CGPoint pointer = CGEventGetLocation(event);
+        if (getenv("LP32_TRACE_DISPLAY"))
+            fprintf(stderr, "compat32: game launch pointer=%s\n", NSStringFromPoint(pointer).UTF8String);
+        CFRelease(event);
+        for (NSScreen *candidate in NSScreen.screens)
+            if (CGRectContainsPoint(CGDisplayBounds(display_id_for_screen(candidate)), pointer)) return candidate;
+    }
+    return [NSScreen mainScreen];
+}
+
+/* Launch placement is a compatibility-window policy, separate from both
+   NSScreen.mainScreen and Quartz's primary display. Remember the display ID,
+   not an NSScreen object, and follow the actual game window after placement. */
+static CGDirectDisplayID launch_display;
+void objc_bridge32_capture_launch_display(void)
+{
+    @autoreleasepool {
+        launch_display = display_id_for_screen(initial_game_screen());
+        if (getenv("LP32_TRACE_DISPLAY"))
+            fprintf(stderr, "compat32: captured launch display=%u primary=%u\n", launch_display, CGMainDisplayID());
+    }
+}
+
+static NSScreen *game_window_screen(void)
+{
+    NSScreen *screen = explicit_game_screen();
+    if (screen) return screen;
+    if (presenting_view && [NSThread isMainThread]) {
+        screen = [[(NSView *)presenting_view window] screen];
+        if (screen) return screen;
+    }
+    if (!launch_display) launch_display = display_id_for_screen(initial_game_screen());
+    return screen_for_display(launch_display) ?: [NSScreen mainScreen];
+}
+
+static NSScreen *game_screen_for_window(NSWindow *window)
+{
+    return explicit_game_screen() ?: window.screen ?: game_window_screen();
+}
+
+static CGDirectDisplayID game_window_display_id(void)
+{
+    CGDirectDisplayID display = display_id_for_screen(game_window_screen());
+    return display ?: CGMainDisplayID();
 }
 
 /*
@@ -2021,11 +2073,12 @@ static CGDirectDisplayID preferred_game_display_id(void)
  * dimension the guest sees agrees.  Zero width means no switch is in effect.
  */
 static NSSize guest_display_mode;
+static CGDirectDisplayID guest_display_mode_display;
 
-static NSSize preferred_display_native_size(void)
+static NSSize display_native_size(CGDirectDisplayID display)
 {
-    CGDisplayModeRef current = CGDisplayCopyDisplayMode(preferred_game_display_id());
-    if (!current) return [preferred_game_screen() frame].size;
+    CGDisplayModeRef current = CGDisplayCopyDisplayMode(display);
+    if (!current) return [screen_for_display(display) frame].size;
     NSSize size = NSMakeSize((CGFloat)CGDisplayModeGetWidth(current),
                              (CGFloat)CGDisplayModeGetHeight(current));
     CFRelease(current);
@@ -2034,7 +2087,7 @@ static NSSize preferred_display_native_size(void)
 
 float objc_bridge32_preferred_display_aspect_ratio(void)
 {
-    NSSize size = preferred_display_native_size();
+    NSSize size = display_native_size(game_window_display_id());
     if (size.width <= 0 || size.height <= 0) return 0;
     return (float)(size.width / size.height);
 }
@@ -2268,15 +2321,17 @@ static NSRect guest_display_mode_rect(NSRect bounds)
                       size.width, size.height);
 }
 
-static void set_guest_display_mode(NSSize requested)
+static void set_guest_display_mode(NSSize requested, CGDirectDisplayID display)
 {
-    NSSize native = preferred_display_native_size();
+    NSSize native = display_native_size(display);
     NSSize previous = guest_display_mode;
     if (requested.width <= 0 || requested.height <= 0 ||
         (requested.width == native.width && requested.height == native.height)) {
         guest_display_mode = NSZeroSize;
+        guest_display_mode_display = 0;
     } else {
         guest_display_mode = requested;
+        guest_display_mode_display = display;
     }
     if (!NSEqualSizes(previous, guest_display_mode)) {
         fprintf(stderr,
@@ -2677,7 +2732,7 @@ static void materialize_automatic_display_mode(void)
     }
 
     CGDisplayModeRef current_mode =
-        CGDisplayCopyDisplayMode(preferred_game_display_id());
+        CGDisplayCopyDisplayMode(game_window_display_id());
     if (!current_mode) return;
     size_t width = CGDisplayModeGetWidth(current_mode);
     size_t height = CGDisplayModeGetHeight(current_mode);
@@ -3076,7 +3131,8 @@ static void activate_game_application(void)
 {
     CGLContextObj context = [[self openGLContext] CGLContextObj];
     if (context) {
-        if (guest_display_mode_active()) {
+        if (guest_display_mode_active() &&
+            display_id_for_screen(self.window.screen) == guest_display_mode_display) {
             GLint dimensions[2] = {
                 (GLint)guest_display_mode.width, (GLint)guest_display_mode.height,
             };
@@ -3101,7 +3157,9 @@ static void activate_game_application(void)
     NSView *superview = [self superview];
     if (!superview) return [self frame];
     NSRect bounds = [superview bounds];
-    return [[self window] contentView] == self ? bounds : guest_display_mode_rect(bounds);
+    return [[self window] contentView] == self ||
+        display_id_for_screen(self.window.screen) != guest_display_mode_display ?
+        bounds : guest_display_mode_rect(bounds);
 }
 
 - (void)setFrame:(NSRect)frame
@@ -3848,7 +3906,7 @@ static NSOpenGLPixelFormat *legacy_pixel_format(void)
     [[self openGLContext] makeCurrentContext];
     NSRect bounds = [self bounds];
     if (bounds.size.width <= 0 || bounds.size.height <= 0) {
-        bounds = [preferred_game_screen() frame];
+        bounds = [game_window_screen() frame];
     }
     const struct lp32_display_layout *display = lp32_profile()->display;
     if (!display || !display->legacy_renderer_display) return;
@@ -4423,7 +4481,7 @@ static NSArray *legacy_modes_for_display(CGDirectDisplayID display)
 
 static NSDictionary *legacy_current_mode_for_display(CGDirectDisplayID display)
 {
-    if (guest_display_mode.width > 0 && display == preferred_game_display_id()) {
+    if (guest_display_mode.width > 0 && display == guest_display_mode_display) {
         for (NSDictionary *candidate in legacy_modes_for_display(display)) {
             if ([[candidate objectForKey:@"Width"] doubleValue] == guest_display_mode.width &&
                 [[candidate objectForKey:@"Height"] doubleValue] == guest_display_mode.height) {
@@ -7179,6 +7237,10 @@ static int objc_bridge32_dispatch_body(const char *import_name,
 #pragma clang diagnostic pop
         return 1;
     }
+    if (LP32_NAME_IS(import_name, import_length, "_CGDisplayIsMain")) {
+        *result = CGDisplayIsMain(arguments[0]);
+        return 1;
+    }
     if (LP32_NAME_IS(import_name, import_length, "_CGMainDisplayID")) {
         *result = preferred_game_display_id();
         return 1;
@@ -7276,12 +7338,13 @@ static int objc_bridge32_dispatch_body(const char *import_name,
      * a mode switch becomes the emulated mode (see guest_display_mode) that
      * the GL surface is rendered at and that later queries report back.
      */
-    if (LP32_NAME_IS(import_name, import_length, "_CGDisplaySwitchToMode")) {
+    if (LP32_NAME_IS(import_name, import_length, "_CGDisplaySwitchToMode") ||
+        LP32_NAME_IS(import_name, import_length, "_CGDisplaySetDisplayMode")) {
         NSDictionary *mode = object_for_argument(arguments[1]);
         NSSize requested = NSMakeSize([[mode objectForKey:@"Width"] doubleValue],
                                       [[mode objectForKey:@"Height"] doubleValue]);
-        if (arguments[0] == preferred_game_display_id() && mode) {
-            set_guest_display_mode(requested);
+        if (mode) {
+            set_guest_display_mode(requested, arguments[0]);
             [presenting_view applyGuestDisplayMode];
         }
         if (getenv("LP32_TRACE_DISPLAY")) {
@@ -7291,10 +7354,14 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         *result = kCGErrorSuccess;
         return 1;
     }
-    if (LP32_NAME_IS(import_name, import_length, "_CGDisplayRelease")) {
-        /* Releasing the captured display restores the desktop mode. */
-        set_guest_display_mode(NSZeroSize);
-        [presenting_view applyGuestDisplayMode];
+    if (LP32_NAME_IS(import_name, import_length, "_CGDisplayRelease") ||
+        LP32_NAME_IS(import_name, import_length, "_CGReleaseAllDisplays")) {
+        /* Releasing another display must not discard this display's mode. */
+        if (LP32_NAME_IS(import_name, import_length, "_CGReleaseAllDisplays") ||
+            arguments[0] == guest_display_mode_display) {
+            set_guest_display_mode(NSZeroSize, 0);
+            [presenting_view applyGuestDisplayMode];
+        }
         *result = kCGErrorSuccess;
         return 1;
     }
@@ -7341,7 +7408,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
             !applied_first_launch_default && !getenv("LP32_KEEP_DEFAULT_RESOLUTION");
         if (first_launch) {
             applied_first_launch_default = true;
-            NSSize native = preferred_display_native_size();
+            NSSize native = display_native_size(arguments[0]);
             /* The game re-validates its ScreenWidth/ScreenHeight against the
                mode list after this call, so move those to the native size as
                well or it would go back to the placeholder. */
@@ -10092,7 +10159,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
             const float *rect = (const void *)(arguments + 2);
             NSRect host_rect = NSMakeRect(rect[0], rect[1], rect[2], rect[3]);
             if ([receiver isKindOfClass:[NSFullScreenWindow class]]) {
-                host_rect = [preferred_game_screen() frame];
+                host_rect = [game_window_screen() frame];
                 fprintf(stderr,
                         "compat32: placing fullscreen window at "
                         "%.0f,%.0f %.0fx%.0f\n",
@@ -10128,7 +10195,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
             /* Clone Wars' Feral layer re-anchors its fullscreen window at
                the main display's origin after creating it; keep it on the
                display the bridge chose. */
-            NSRect host_rect = [preferred_game_screen() frame];
+            NSRect host_rect = [game_screen_for_window(receiver) frame];
             [(NSWindow *)receiver setFrame:host_rect display:arguments[6] != 0];
             for (NSView *subview in [[(NSWindow *)receiver contentView] subviews]) {
                 if ([subview isKindOfClass:[OpenGLView class]]) {
@@ -10290,11 +10357,11 @@ static int objc_bridge32_dispatch_body(const char *import_name,
             strcmp(selector_name, "visibleFrame") == 0) {
             if (guest_display_mode_active() &&
                 [receiver isKindOfClass:[NSScreen class]] &&
-                receiver == preferred_game_screen()) {
+                display_id_for_screen(receiver) == guest_display_mode_display) {
                 /* After a mode switch the old API reported the new mode as
                    the screen size; keep the guest's view of it consistent. */
-                rect = NSMakeRect(0, 0, guest_display_mode.width,
-                                  guest_display_mode.height);
+                rect = [(NSScreen *)receiver frame];
+                rect.size = guest_display_mode;
             } else if (strcmp(selector_name, "frame") == 0) {
                 rect = [(NSScreen *)receiver frame];
             } else {
@@ -11664,4 +11731,123 @@ int objc_bridge32_run_gl_texture_self_test(void)
              "colliding entries)");
     }
     return status;
+}
+
+/* Exercise the guest ABI while changing Cocoa focus independently of Quartz.
+   Only this self-test replaces mainScreen; no game launch uses that hook. */
+static NSScreen *display_test_focus;
+static NSScreen *display_test_main_screen(id self, SEL selector)
+{
+    (void)self; (void)selector;
+    return display_test_focus;
+}
+
+int objc_bridge32_run_display_self_test(void)
+{
+    @autoreleasepool {
+        [NSApplication sharedApplication];
+        unsetenv("LP32_TEST_DISPLAY"); unsetenv("LP32_DISPLAY_INDEX");
+        unsetenv("LP32_USE_SECONDARY_DISPLAY");
+        NSArray *screens = NSScreen.screens;
+        if (!screens.count) return -1;
+        Method main = class_getClassMethod([NSScreen class], @selector(mainScreen));
+        IMP original = method_setImplementation(main, (IMP)display_test_main_screen);
+        bool valid = true;
+#define DISPLAY_CHECK(condition) do { if (!(condition)) { \
+    fprintf(stderr, "Display bridge FAIL at line %d: %s\n", __LINE__, #condition); \
+    valid = false; } } while (0)
+        CGDirectDisplayID primary = CGMainDisplayID();
+        uint32_t main_args[] = {proxy_for_object([NSScreen class]), objc_bridge32_guest_selector("mainScreen")};
+        uint64_t result = 0;
+        for (unsigned i = 0; i < screens.count * 2; ++i) {
+            display_test_focus = screens[i % screens.count];
+            DISPLAY_CHECK(objc_bridge32_dispatch("_objc_msgSend", main_args, &result) &&
+                object_for_argument((uint32_t)result) == display_test_focus);
+            DISPLAY_CHECK(objc_bridge32_dispatch("_CGMainDisplayID", NULL, &result) && result == primary);
+            for (NSScreen *screen in screens) {
+                uint32_t a[] = {display_id_for_screen(screen)};
+                DISPLAY_CHECK(objc_bridge32_dispatch("_CGDisplayIsMain", a, &result) && result == (a[0] == primary));
+            }
+        }
+        for (NSUInteger i = 0; i < screens.count; ++i) {
+            char index[32]; snprintf(index, sizeof index, "%lu", (unsigned long)i);
+            setenv("LP32_DISPLAY_INDEX", index, 1);
+            DISPLAY_CHECK(preferred_game_screen() == screens[i]);
+            DISPLAY_CHECK(preferred_game_display_id() == display_id_for_screen(screens[i]));
+        }
+        setenv("LP32_DISPLAY_INDEX", "9999", 1);
+        DISPLAY_CHECK(preferred_game_screen() == display_test_focus && preferred_game_display_id() == primary);
+        unsetenv("LP32_DISPLAY_INDEX");
+        uint32_t output = compat_runtime32_allocate(16, 1);
+        uint32_t frame_selector = objc_bridge32_guest_selector("frame");
+        for (NSScreen *target in screens) {
+            CGDirectDisplayID target_id = display_id_for_screen(target);
+            CFDictionaryRef bounds = CGRectCreateDictionaryRepresentation(CGDisplayBounds(target_id));
+            NSDictionary *window = @{(id)kCGWindowOwnerPID:@4242, (id)kCGWindowLayer:@0,
+                (id)kCGWindowAlpha:@1, (id)kCGWindowBounds:(id)bounds};
+            DISPLAY_CHECK(screen_for_foreground_window(@[window], 4242) == target);
+            DISPLAY_CHECK(!screen_for_foreground_window(@[window], 4243));
+            CFRelease(bounds);
+            NSDictionary *mode = nil;
+            NSSize native = display_native_size(target_id);
+            for (NSDictionary *candidate in legacy_modes_for_display(target_id)) {
+                if ([candidate[@"Width"] doubleValue] != native.width ||
+                    [candidate[@"Height"] doubleValue] != native.height) { mode = candidate; break; }
+            }
+            DISPLAY_CHECK(mode != nil);
+            NSSize selected = NSMakeSize([mode[@"Width"] doubleValue], [mode[@"Height"] doubleValue]);
+            uint32_t switch_args[] = {target_id, proxy_for_object(mode), 0};
+            DISPLAY_CHECK(objc_bridge32_dispatch("_CGDisplaySwitchToMode", switch_args, &result));
+            for (NSScreen *screen in screens) {
+                uint32_t args[] = {output, proxy_for_object(screen), frame_selector};
+                DISPLAY_CHECK(objc_bridge32_dispatch("_objc_msgSend_stret", args, &result));
+                const float *r = (void *)(uintptr_t)output;
+                NSRect expected = screen.frame;
+                if (screen == target) expected.size = selected;
+                DISPLAY_CHECK(r[0] == expected.origin.x && r[1] == expected.origin.y &&
+                    r[2] == expected.size.width && r[3] == expected.size.height);
+                uint32_t display_args[] = {display_id_for_screen(screen)};
+                DISPLAY_CHECK(objc_bridge32_dispatch("_CGDisplayCurrentMode", display_args, &result));
+                NSDictionary *current = object_for_argument((uint32_t)result);
+                NSSize size = screen == target ? selected : display_native_size(display_args[0]);
+                DISPLAY_CHECK([current[@"Width"] doubleValue] == size.width &&
+                    [current[@"Height"] doubleValue] == size.height);
+                if (screen != target) {
+                    DISPLAY_CHECK(objc_bridge32_dispatch("_CGDisplayRelease", display_args, &result));
+                    DISPLAY_CHECK(guest_display_mode_display == target_id && guest_display_mode_active());
+                }
+            }
+            DISPLAY_CHECK(objc_bridge32_dispatch("_CGReleaseAllDisplays", NULL, &result));
+            DISPLAY_CHECK(!guest_display_mode_active());
+
+            /* Creation uses launch placement even while AppKit focus is on
+               another monitor. Subsequent frame changes follow the window. */
+            display_test_focus = screens[0];
+            launch_display = target_id;
+            NSWindow *fullscreen = [NSFullScreenWindow alloc];
+            uint32_t init_args[9] = {proxy_for_object(fullscreen), objc_bridge32_guest_selector(
+                "initWithContentRect:styleMask:backing:defer:")};
+            float tiny[] = {0,0,64,48}; memcpy(init_args + 2, tiny, sizeof tiny);
+            init_args[7] = NSBackingStoreBuffered; init_args[8] = 1;
+            DISPLAY_CHECK(objc_bridge32_dispatch("_objc_msgSend", init_args, &result));
+            fullscreen = object_for_argument((uint32_t)result);
+            fullscreen.releasedWhenClosed = NO;
+            DISPLAY_CHECK(NSEqualRects(fullscreen.frame, target.frame));
+            for (NSScreen *destination in screens) {
+                [fullscreen setFrame:destination.frame display:NO];
+                uint32_t frame_args[7] = {proxy_for_object(fullscreen), objc_bridge32_guest_selector("setFrame:display:")};
+                memcpy(frame_args + 2, tiny, sizeof tiny);
+                DISPLAY_CHECK(objc_bridge32_dispatch("_objc_msgSend", frame_args, &result));
+                DISPLAY_CHECK(NSEqualRects(fullscreen.frame, destination.frame));
+                DISPLAY_CHECK(objc_bridge32_dispatch("_CGMainDisplayID", NULL, &result) && result == primary);
+            }
+            [fullscreen close]; [fullscreen release];
+        }
+        compat_runtime32_deallocate(output);
+        launch_display = 0;
+        method_setImplementation(main, original);
+        if (valid) printf("Display bridge PASS (%lu screens; dynamic Cocoa focus; independent Quartz primary; overrides; foreground placement; display modes and origins; LEGO fullscreen creation and moves)\n", (unsigned long)screens.count);
+#undef DISPLAY_CHECK
+        return valid ? 0 : -1;
+    }
 }
