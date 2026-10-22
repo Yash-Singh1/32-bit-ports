@@ -7,6 +7,12 @@ i386 Mach-O executable and packed data in `Contents/Resources/res`.
 
 ## Build and convert
 
+Download [Fast Five Converter 0.0.0-dev.1](https://github.com/Yash-Singh1/32-bit-ports/releases/tag/fastfive-converter-v0.0.0-dev.1),
+unzip it and open `FastFive-Converter.app`. The download includes the loader
+and GLMetal and does not require Xcode, Python or a source checkout. It
+contains no game data or Apple runtime libraries. This development build
+uses ad hoc signing and is not notarized.
+
 Build the separate Fast Five converter:
 
 ```sh
@@ -88,9 +94,8 @@ track, race type and garage selection, and a Rio normal race at 1920x1200.
 Holding the up arrow drove the car through the first lap. 108 shaders
 compiled without errors.
 
-GLMetal reaches the same Rio race. It needs GLMetal 8a9d42b or later, newer
-than the `native/glmetal` pin on this branch, so build the converter with
-`GLMETAL_SOURCE=/path/to/glmetal` until the pin moves. Legacy shaders
+GLMetal reaches the same Rio race. It needs GLMetal 8a9d42b or later, the
+`native/glmetal` pin. Legacy shaders
 may name a sampler `texture`, declare a varying once per preprocessor branch
 or qualify it through a precision macro, and only uniforms a shader reads or
 initializes are active, as on Apple's OpenGL. Without the last, the engine's shader

@@ -7,7 +7,7 @@ version 1.0.9, with an i386 Mach-O executable and packed data in
 
 ## Build and convert
 
-Download [Asphalt 6 Converter 0.0.0-dev.2](https://github.com/Yash-Singh1/32-bit-ports/releases/tag/asphalt6-converter-v0.0.0-dev.2),
+Download [Asphalt 6 Converter 0.0.0-dev.3](https://github.com/Yash-Singh1/32-bit-ports/releases/tag/asphalt6-converter-v0.0.0-dev.3),
 unzip it and open `Asphalt6-Converter.app`. The download includes the loader
 and does not require Xcode, Python or a source checkout. It contains no game
 data or Apple runtime libraries. This development build uses ad hoc signing
@@ -112,10 +112,10 @@ Settings use `com.gameloft.asphalt6mac.compat`. The generated app logs to
 
 ## Controllers
 
-Source builds include experimental controller support for the original Mac
-1.0.9 executable. The published Dev 2 converter predates this implementation.
-Rebuild the converter or use `make -C native GAME=asphalt6 promote-loader`
-to update an existing development app. The adapter uses the first connected
+Experimental controller support for the original Mac 1.0.9 executable is
+included from the Dev 3 converter. Convert the game again, or use
+`make -C native GAME=asphalt6 promote-loader` to update an existing
+development app. The adapter uses the first connected
 device with a GameController.framework extended gamepad profile.
 
 - Left stick steers proportionally, with an 18% dead zone. D-pad Left/Right
