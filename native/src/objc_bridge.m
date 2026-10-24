@@ -1688,9 +1688,17 @@ static NSRect gangstar_safe_window_frame(NSWindow *window, NSRect frame)
 /* The game sizes its borderless fullscreen window before its GL view is in
    it (the intro movie plays in that window), so the safe area is applied
    to the window frame itself as well. */
+/* Fast Five's EAGLView (the same Gameloft Cocoa layer) has the same
+   fullscreen window and view sizing; see fastfive_mouse_location. */
+static bool fits_fullscreen_view(void)
+{
+    return lp32_profile()->title == LP32_TITLE_GANGSTAR ||
+           lp32_profile()->title == LP32_TITLE_FASTFIVE;
+}
+
 static bool gangstar_fit_fullscreen_window(id receiver, const char *selector, const uint32_t *arguments)
 {
-    if (lp32_profile()->title != LP32_TITLE_GANGSTAR ||
+    if (!fits_fullscreen_view() ||
         (strcmp(selector, "setFrame:display:") && strcmp(selector, "center")) ||
         ![receiver isKindOfClass:[NSWindow class]] ||
         ([(NSWindow *)receiver styleMask] & NSWindowStyleMaskTitled))
@@ -1712,14 +1720,18 @@ static bool gangstar_fit_fullscreen_window(id receiver, const char *selector, co
    keeps the menu-bar gap. It then centres that smaller window. Use the whole
    selected display, below the camera housing where one is present, for both
    the window and the screen geometry used by its renderer and mouse mapping. */
+/* Fast Five sizes its borderless window and GL view to the screen's frame
+   when its resolution is the display's own, so it gets the safe area as
+   well and renders at the size of the window it is given. */
 static bool asphalt_fullscreen_screen_frame(NSScreen *screen, NSRect *frame)
 {
-    if (lp32_profile()->title != LP32_TITLE_ASPHALT6) return false;
+    bool fastfive = lp32_profile()->title == LP32_TITLE_FASTFIVE;
+    if (lp32_profile()->title != LP32_TITLE_ASPHALT6 && !fastfive) return false;
     Class window_class = NSClassFromString(@"CustomWindow");
     for (NSWindow *window in NSApp.windows) {
         if (![window isKindOfClass:window_class] ||
             (window.styleMask & NSWindowStyleMaskTitled) ||
-            display_id_for_screen(window.screen) != display_id_for_screen(screen)) continue;
+            (!fastfive && display_id_for_screen(window.screen) != display_id_for_screen(screen))) continue;
         *frame = gangstar_safe_window_frame(window, screen.frame);
         return true;
     }
@@ -1774,17 +1786,50 @@ static bool asphalt_fit_window(id receiver, const char *selector, const uint32_t
     return true;
 }
 
+static char fullscreen_view_size;
+
+static bool fit_fullscreen_view_to_window(NSView *view, const float requested[4]);
+
+/* Fast Five installs its GL view again as the window's content view after
+   setting its backing size, and AppKit then stretches it over the window. */
+static bool fastfive_fit_content_view(id receiver, const char *selector, const uint32_t *arguments)
+{
+    if (lp32_profile()->title != LP32_TITLE_FASTFIVE || strcmp(selector, "setContentView:") ||
+        ![receiver isKindOfClass:[NSWindow class]] ||
+        ([(NSWindow *)receiver styleMask] & NSWindowStyleMaskTitled))
+        return false;
+    NSView *view = object_for_argument(arguments[2]);
+    NSValue *size = [view isKindOfClass:[NSView class]] ?
+        objc_getAssociatedObject(view, &fullscreen_view_size) : nil;
+    if (!size) return false;
+    [(NSWindow *)receiver setContentView:view];
+    float requested[4] = {0, 0, (float)size.sizeValue.width, (float)size.sizeValue.height};
+    fit_fullscreen_view_to_window(view, requested);
+    return true;
+}
+
 static bool gangstar_fit_fullscreen_view(id receiver, const char *selector, const uint32_t *arguments)
 {
-    if (lp32_profile()->title != LP32_TITLE_GANGSTAR || strcmp(selector, "setFrame:") ||
+    if (!fits_fullscreen_view() || strcmp(selector, "setFrame:") ||
         ![receiver isKindOfClass:[NSView class]] ||
         ![receiver respondsToSelector:@selector(openGLContext)])
         return false;
     NSView *view = receiver;
     NSWindow *window = view.window;
-    if (!window || (window.styleMask & NSWindowStyleMaskTitled)) return false;
     float requested[4];
     memcpy(requested, arguments + 2, sizeof requested);
+    /* Fast Five sizes the view before it adds it to the window. */
+    if (lp32_profile()->title == LP32_TITLE_FASTFIVE && !window)
+        objc_setAssociatedObject(view, &fullscreen_view_size,
+            [NSValue valueWithSize:NSMakeSize(requested[2], requested[3])], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!window || (window.styleMask & NSWindowStyleMaskTitled)) return false;
+    return fit_fullscreen_view_to_window(view, requested);
+}
+
+static bool fit_fullscreen_view_to_window(NSView *view, const float requested[4])
+{
+    NSWindow *window = view.window;
+    if (!window) return false;
     NSRect safe = gangstar_safe_window_frame(window, window.frame);
     if (!NSEqualRects(safe, window.frame)) [window setFrame:safe display:NO];
     NSSize area = [window contentRectForFrameRect:window.frame].size;
@@ -1795,9 +1840,56 @@ static bool gangstar_fit_fullscreen_view(id receiver, const char *selector, cons
                                floor((area.height - size.height) / 2), size.width, size.height);
     window.backgroundColor = [NSColor blackColor];
     [view setFrame:fitted];
+    if (lp32_profile()->title == LP32_TITLE_FASTFIVE) {
+        objc_setAssociatedObject(view, &fullscreen_view_size,
+            [NSValue valueWithSize:NSMakeSize(requested[2], requested[3])], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        /* It sets a backing size only for resolutions other than the
+           display's; render any other mismatch at the requested size too. */
+        NSOpenGLContext *context = [NSOpenGLContext currentContext];
+        GLint enabled = 0;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        bool drawn_by_context = context.view == view;
+#pragma clang diagnostic pop
+        if (drawn_by_context && !NSEqualSizes(size, NSMakeSize(requested[2], requested[3])) &&
+            CGLIsEnabled(context.CGLContextObj, kCGLCESurfaceBackingSize, &enabled) == kCGLNoError && !enabled) {
+            GLint dimensions[2] = {(GLint)requested[2], (GLint)requested[3]};
+            CGLSetParameter(context.CGLContextObj, kCGLCPSurfaceBackingSize, dimensions);
+            CGLEnable(context.CGLContextObj, kCGLCESurfaceBackingSize);
+            [context update];
+        }
+    }
     if (getenv("LP32_TRACE_DISPLAY"))
         fprintf(stderr, "compat32: fullscreen GL view %.0fx%.0f fitted to %s\n",
                 requested[2], requested[3], NSStringFromRect(fitted).UTF8String);
+    return true;
+}
+
+/* Fast Five reads mouse positions from -[NSEvent locationInWindow] in its
+   view's handlers and takes them as points of its resolution, measuring y
+   down from the top of the window frame.  In the fitted fullscreen view
+   (fit_fullscreen_view_to_window) a resolution other than the window's
+   size left the cursor short of the right and bottom edges, so positions
+   are mapped through the view frame to the requested size and clamped to
+   it, then expressed in the game's own convention. */
+static bool fastfive_mouse_location(id receiver, const char *selector, uint64_t *result)
+{
+    if (lp32_profile()->title != LP32_TITLE_FASTFIVE || strcmp(selector, "locationInWindow") ||
+        ![receiver isKindOfClass:[NSEvent class]])
+        return false;
+    NSEvent *event = receiver;
+    NSWindow *window = event.window;
+    NSView *view = window.contentView;
+    NSValue *value = view ? objc_getAssociatedObject(view, &fullscreen_view_size) : nil;
+    if (!value || (window.styleMask & NSWindowStyleMaskTitled)) return false;
+    NSSize size = value.sizeValue;
+    NSRect frame = view.frame;
+    if (size.width <= 0 || size.height <= 0 || frame.size.width <= 0 || frame.size.height <= 0) return false;
+    NSPoint point = event.locationInWindow;
+    float x = (float)fmin(fmax((point.x - frame.origin.x) * size.width / frame.size.width, 0), size.width);
+    float y = (float)fmin(fmax((point.y - frame.origin.y) * size.height / frame.size.height, 0), size.height);
+    float location[2] = {x, (float)(window.frame.size.height - size.height) + y};
+    memcpy(result, location, sizeof location);
     return true;
 }
 
@@ -12505,10 +12597,12 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         if (handle_test_activation(receiver, selector_name, result)) return 1;
         if (selector_name && (asphalt_fit_window(receiver, selector_name, arguments) ||
                               gangstar_fit_fullscreen_window(receiver, selector_name, arguments) ||
-                              gangstar_fit_fullscreen_view(receiver, selector_name, arguments))) {
+                              gangstar_fit_fullscreen_view(receiver, selector_name, arguments) ||
+                              fastfive_fit_content_view(receiver, selector_name, arguments))) {
             *result = 0;
             return 1;
         }
+        if (selector_name && fastfive_mouse_location(receiver, selector_name, result)) return 1;
         /* Creating, attaching, making current or presenting a context may
            give the current context different texture bindings. */
         if (receiver == [NSOpenGLContext class] ||
@@ -13052,7 +13146,8 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         NSRect rect;
         if (strcmp(selector_name, "frame") == 0 ||
             strcmp(selector_name, "visibleFrame") == 0) {
-            if (!strcmp(selector_name, "visibleFrame") &&
+            if ((!strcmp(selector_name, "visibleFrame") ||
+                 lp32_profile()->title == LP32_TITLE_FASTFIVE) &&
                 [receiver isKindOfClass:[NSScreen class]] &&
                 asphalt_fullscreen_screen_frame(receiver, &rect)) {
                 /* The window stays at the host display size even when the

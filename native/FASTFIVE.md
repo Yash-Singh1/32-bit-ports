@@ -79,6 +79,24 @@ Its `applicationDidBecomeActive:` calls `makeKeyAndOrderFront:` again.
 Background test runs simulate activation, and now notify only when the
 simulated focus changes, as AppKit does; repeating the notification looped.
 
+Fullscreen uses a borderless window sized from the main screen's frame,
+with the GL view sized to the chosen resolution. The resolution menu switches
+the display mode, which stays native here. As with Gangstar:
+
+- On a display with a camera housing, macOS moved the window down by the
+  strip's height, which cut off the bottom of the picture. The window now
+  covers the screen's safe area, and the game is given that area as the
+  screen frame.
+- A resolution other than the window's size left the view in a corner, or
+  stretched it once the game reinstalled the view as the content view. The
+  view is now fitted to the window at the resolution's aspect ratio, on
+  black, both when it is sized and when it is reinstalled, and renders at the
+  requested size through a CGL backing size.
+- The game reads mouse positions from `-[NSEvent locationInWindow]` as points
+  of its resolution, so with a smaller resolution the cursor stopped short of
+  the right and bottom edges. Positions are now mapped through the fitted
+  view to the resolution and clamped to it.
+
 The game keeps its saves in `~/Library/<CFBundleName>`, so the converter
 keeps `CFBundleName` (`FastFive`). Settings use
 `com.gameloft.fastfivemac.compat`, and the generated app logs to
@@ -102,6 +120,14 @@ initializes are active, as on Apple's OpenGL. Without the last, the engine's sha
 parameter table had a null entry (crash at `0x799793`). GLMetal's
 `make test-legacy-reflection` covers these cases. A GLMetal app converted
 with the bundled driver also reached the menus, garage and tutorial prompt.
+
+Display probes on the built-in 1728x1117 panel (safe area 1728x1085) used
+`LP32_TEST_DISPLAY=1` and `LP32_TRACE_DISPLAY=1`. A fresh profile renders
+1728x1117 into a 1678x1085 view. After 1024x768 was saved, the view is
+1447x1085 and pillarboxed. After 1920x1200 it is 1728x1080. In each case the
+cursor reached the right and bottom edges, and menu clicks hit their targets.
+On the external 1920x1200 display, a 1728x1117 resolution saved on the panel
+is fitted to 1856x1200.
 
 Audio, controllers, multiplayer, full races, career mode
 and long sessions remain unverified, as does the Mac App Store receipt path.
