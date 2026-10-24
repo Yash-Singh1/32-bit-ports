@@ -1,18 +1,76 @@
 # Call of Duty 4: Modern Warfare (Mac)
 
-The converter accepts a 32-bit Intel Mac COD4 app with its game data regardless
-of bundle ID, version string, or executable hash. Steam's library is optional.
-For an executable other than the tested Steam binary, the loader uses a generic
-COD4 profile and skips patches tied to fixed game addresses. Conversion means
-the game can be tried; it does not establish that its menus or gameplay work.
-PowerPC-only and Windows executables cannot run in this i386 loader. A release
-that requires its own activation or App Store receipt may still require work.
-The converter does not modify those checks.
+The converter supports Aspyr's 1.7.2 Steam and Mac App Store editions. The Mac
+App Store version is reported working after the issue #13 startup fixes in
+[COD4 Converter dev.5](releases/COD4-Converter-0.0.0-dev.5.md). Local gameplay
+verification covers the Steam edition; local checks for the supplied App Store
+executable cover its factory/retain, IOKit data, and request encryption paths.
 
-The only build verified in gameplay is Aspyr's **1.7.2 Steam Mac release**, app 7940, using the
-same i386-in-x86_64 loader as the LEGO games. The `tfu` and `portal2` branches
-provided the guest dylib, C++ runtime extraction, and guest context machinery.
-The existing main-branch Carbon, OpenGL and audio bridges remain in use.
+Other 32-bit Intel Mac COD4 apps with their game data are accepted regardless
+of bundle ID, version string, or executable hash. Untested executables use a
+generic profile that skips patches tied to fixed Steam addresses. Accepting an
+app does not establish that its menus or gameplay work. PowerPC-only and Windows
+executables cannot run in this i386 loader. Activation and receipt checks remain
+the game's responsibility.
+
+## Mac App Store compatibility fixes
+
+Guest autorelease scopes now cover superclass calls and calls before the guest
+creates a pool. Native factory/getter results belonging to guest classes also
+remain alive across the per-import native pool. A fallback scope preserves
+pool-free startup objects for the rest of the guest run. Owned method-family
+results still deallocate when their guest ownership ends.
+
+IOKit CreateCFProperty, CreateCFProperties and SearchCFProperty results now
+carry guest ownership. Previously, an autorelease could free the native value
+while leaving its guest handle registered. The supplied executable reproduced
+this crash at `getBytes:length:`; its own IOKit helper now passes with explicit
+and fallback guest pools.
+
+The App Store startup routine's legacy OpenSSL setup, memory BIO, PEM RSA public
+key decoding and EVP encryption calls use macOS LibreSSL through guest handles.
+OpenSSL 0.9.7's encryption signature calls `EVP_PKEY_encrypt_old`, rather than the
+modern function with different arguments. The supplied routine reaches the
+checkpoint before asynchronous networking. That local check sends no request
+and does not verify every OpenSSL API or the complete App Store game flow.
+
+The loader also handles fragile-ABI NSString literals in
+`__OBJC,__cstring_object`, including layouts above `0x0c000000`. This fixes a
+separately reproduced string-layout gap; the issue #13 executable uses CFString
+literals and did not need that particular change.
+
+## Diagnostics and regression checks
+
+Finder launches write `~/Library/Logs/COD4Compat/last-run.log`, or
+`~/Library/Logs/COD4MPCompat/last-run.log` for multiplayer. Each launch replaces
+the previous log. Failed lookups include the receiver's image section, readable
+object words, known guest class, and recent identity-map retirement.
+
+The dev.5 release enables a bounded Objective-C recorder automatically. Native
+crashes include the active selector, guest/native identity, method and type
+encoding, recent message and lifetime events, native stack words, and a startup
+snapshot of native image bases and UUIDs. The recorder copies scalar values and
+names without retaining objects. Its crash reporting does not query Objective-C
+or dyld or acquire a blocking recorder lock. Set `LP32_OBJC_DIAGNOSTICS=0` to
+disable it. Local builds default to off unless built with
+`OBJC_DIAGNOSTICS_DEFAULT=1` or launched with `LP32_OBJC_DIAGNOSTICS=1`.
+
+Run the following standalone checks:
+
+```sh
+make -C native test-objc-lifetime test-objc-constant-string test-objc-iokit-ownership test-openssl-legacy
+```
+
+They compile original i386 fixtures and need no game files or Apple runtime archive.
+The lifetime suite deliberately triggers a native crash and checks persistent
+logs and bounded history wrap. Set `LP32_TEST_DIAGNOSTICS_DEFAULT=1` when testing
+a binary with recording enabled by default to check that launch flags are not
+needed.
+
+The optional `tests/test_cod4_appstore_startup.py --image PATH_TO_COD4_IMAGE`
+uses the supplied issue #13 image in a converted app with its private runtime.
+It validates the image hash before using diagnostic addresses and stops before
+starting a network request. The repository and converter contain no game files.
 
 ## Validation status
 

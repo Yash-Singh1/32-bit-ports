@@ -8,6 +8,7 @@
 #include "hid_bridge.h"
 #include "dispatch_bridge.h"
 #include "objc_legacy_bridge.h"
+#include "objc_diagnostics.h"
 #include "carbon_bridge.h"
 #include "cfnetwork_bridge.h"
 #include "hitch_recorder.h"
@@ -51,6 +52,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <mach/mach_time.h>
+#include <mach/mach_vm.h>
 
 /* These GL 3.0 access flags are absent from Apple's legacy <OpenGL/gl.h>. */
 #ifndef GL_MAP_READ_BIT
@@ -662,14 +664,24 @@ static void guest_autorelease_push(void)
     if(!scope)abort();
     scope->parent=guest_autorelease_scope;guest_autorelease_scope=scope;
     ++guest_autorelease_depth;
+    objc_diag_note(OBJC_DIAG_POOL_PUSH, 0, NULL, 0, NULL, guest_autorelease_depth);
 }
 static void guest_autorelease_add(uint32_t token)
 {
-    if(!guest_autorelease_scope || !token)return;
+    if(!token)return;
+    /* Carbon startup can use Cocoa without creating a guest pool. Keep
+       those objects in a fallback scope instead of draining them at this
+       single import's native pool boundary. Like a missing pool on i386,
+       the fallback keeps them for the remainder of the guest run. */
+    if(!guest_autorelease_scope) {
+        guest_autorelease_push();
+        fprintf(stderr, "compat32: created fallback guest autorelease scope\n");
+    }
     struct guest_autorelease_entry *entry=malloc(sizeof(*entry));
     if(!entry)abort();
     *entry=(struct guest_autorelease_entry){token,guest_autorelease_scope->objects};
     guest_autorelease_scope->objects=entry;
+    objc_diag_note(OBJC_DIAG_AUTORELEASE, token, NULL, 0, NULL, guest_autorelease_depth);
 }
 static void guest_autorelease_pop(void)
 {
@@ -677,6 +689,7 @@ static void guest_autorelease_pop(void)
     if(!scope)return;
     guest_autorelease_scope=scope->parent;
     --guest_autorelease_depth;
+    objc_diag_note(OBJC_DIAG_POOL_POP, 0, NULL, 0, NULL, guest_autorelease_depth);
     while(scope->objects){
         struct guest_autorelease_entry *entry=scope->objects;
         scope->objects=entry->next;
@@ -724,6 +737,14 @@ uint32_t objc_bridge32_guest_recent_object(void *object)
 
 static uint32_t proxy_for_autoreleased_object(id object)
 {
+    uint32_t legacy = objc_legacy32_token(object);
+    if (legacy && !class_isMetaClass(object_getClass(object))) {
+        /* The legacy identity map is weak. Unlike ordinary proxies it did
+           not acquire a bridge reference when creating the token. */
+        [object retain];
+        guest_autorelease_add(legacy);
+        return legacy;
+    }
     if(!guest_autorelease_scope)return proxy_for_object(object);
     bool previous=creating_cf_object;creating_cf_object=true;
     uint32_t token=proxy_for_object(object);creating_cf_object=previous;
@@ -993,6 +1014,17 @@ uint32_t objc_bridge32_guest_pointer(void *pointer)
     return token;
 }
 uint32_t objc_bridge32_guest_object(void *object) { return proxy_for_object((id)object); }
+uint32_t objc_bridge32_guest_owned_object(void *object)
+{
+    uint32_t legacy = objc_legacy32_token(object);
+    if (legacy) {
+        /* Ordinary proxies hold a native bridge reference; the legacy map
+           is weak, so preserve that reference explicitly for guest ownership. */
+        [(id)object retain];
+        return legacy;
+    }
+    return proxy_for_owned_object((id)object);
+}
 
 /* objc_exception_match: exception is a guest object token, cls a class token. */
 uint32_t objc_bridge32_guest_is_kind_of_class(uint32_t exception, uint32_t cls)
@@ -1355,6 +1387,94 @@ static uint32_t register_proxy_with_handle(id object, uint32_t handle)
     return handle;
 }
 
+static bool legacy_constant_string_address(uint32_t address)
+{
+    const struct macho_image32 *image = bridge_image;
+    return image && address >= image->objc_string_start &&
+        address < image->objc_string_end &&
+        image->objc_string_end - address >= 12 &&
+        (address - image->objc_string_start) % 12 == 0;
+}
+
+static bool image_has_string_bytes(uint32_t address, uint32_t length)
+{
+    const struct macho_image32 *image = bridge_image;
+    if (!image || !image->header || length >= UINT32_C(0x100000)) return false;
+    const struct load_command *command = (const void *)(image->header + 1);
+    for (uint32_t i = 0; i < image->header->ncmds; ++i) {
+        if (command->cmd == LC_SEGMENT) {
+            const struct segment_command *segment = (const void *)command;
+            if ((segment->initprot & VM_PROT_READ) && address >= segment->vmaddr &&
+                address - segment->vmaddr < segment->filesize &&
+                length <= segment->filesize - (address - segment->vmaddr)) return true;
+        }
+        command = (const void *)((const uint8_t *)command + command->cmdsize);
+    }
+    return false;
+}
+
+static id legacy_constant_string(uint32_t address)
+{
+    if (!legacy_constant_string_address(address)) return nil;
+    /* The fragile ABI stores {isa, bytes, byte length}; the isa belongs to
+       the i386 runtime and must never be sent to native Objective-C. */
+    const uint32_t *record = (const void *)(uintptr_t)address;
+    if (!image_has_string_bytes(record[1], record[2])) return nil;
+    static NSMutableDictionary *strings;
+    pthread_mutex_lock(&proxy_mutex);
+    if (!strings) strings = [[NSMutableDictionary alloc] init];
+    NSNumber *key = [NSNumber numberWithUnsignedInt:address];
+    NSString *string = [strings objectForKey:key];
+    if (!string) {
+        string = [[[NSString alloc] initWithBytes:(const void *)(uintptr_t)record[1]
+            length:record[2] encoding:NSUTF8StringEncoding] autorelease];
+        if (!string) string = [[[NSString alloc] initWithBytes:(const void *)(uintptr_t)record[1]
+            length:record[2] encoding:NSISOLatin1StringEncoding] autorelease];
+        if (string) {
+            [strings setObject:string forKey:key];
+            fprintf(stderr, "compat32: bridged legacy NSString literal at 0x%08x length=%u\n",
+                    address, record[2]);
+        }
+    }
+    pthread_mutex_unlock(&proxy_mutex);
+    return string;
+}
+
+/* Failed lookups must leave enough context in last-run.log to distinguish
+   an unhandled static object from a guest heap pointer, without a debugger. */
+static void log_unresolved_objc_receiver(uint32_t receiver)
+{
+    const struct macho_image32 *image = bridge_image;
+    if (image && image->header) {
+        fprintf(stderr, "compat32: Objective-C image range=0x%08x-0x%08x "
+                "CF strings=0x%08x-0x%08x legacy strings=0x%08x-0x%08x\n",
+                image->min_address, image->max_address, image->cfstring_start,
+                image->cfstring_end, image->objc_string_start, image->objc_string_end);
+        const struct load_command *command = (const void *)(image->header + 1);
+        for (uint32_t i = 0; i < image->header->ncmds; ++i) {
+            if (command->cmd == LC_SEGMENT) {
+                const struct segment_command *segment = (const void *)command;
+                const struct section *sections = (const void *)(segment + 1);
+                for (uint32_t j = 0; j < segment->nsects; ++j)
+                    if (receiver >= sections[j].addr && receiver - sections[j].addr < sections[j].size)
+                        fprintf(stderr, "compat32: Objective-C receiver section=%.16s,%.16s "
+                                "offset=0x%x\n", segment->segname, sections[j].sectname,
+                                receiver - sections[j].addr);
+            }
+            command = (const void *)((const uint8_t *)command + command->cmdsize);
+        }
+    }
+    uint32_t words[4] = {0};
+    mach_vm_size_t copied = 0;
+    kern_return_t status = mach_vm_read_overwrite(mach_task_self(), receiver, sizeof(words),
+                                                 (mach_vm_address_t)words, &copied);
+    if (status == KERN_SUCCESS && copied == sizeof(words))
+        fprintf(stderr, "compat32: Objective-C receiver words=%08x,%08x,%08x,%08x\n",
+                words[0], words[1], words[2], words[3]);
+    else fprintf(stderr, "compat32: Objective-C receiver words unavailable status=%d\n", status);
+    objc_legacy32_log_object(receiver, status == KERN_SUCCESS && copied >= 4 ? words[0] : 0);
+}
+
 static id object_for_receiver(uint32_t receiver)
 {
     if (!receiver) return nil;
@@ -1379,17 +1499,21 @@ static id object_for_receiver(uint32_t receiver)
     if (slot < proxy_count && proxies[slot].handle == receiver) {
         id object = proxies[slot].object;
         pthread_mutex_unlock(&proxy_mutex);
+        objc_diag_resolved(receiver, object, 0);
         return object;
     }
     for (uint32_t index = 0; index < proxy_count; ++index) {
         if (proxies[index].handle == receiver) {
             id object = proxies[index].object;
             pthread_mutex_unlock(&proxy_mutex);
+            objc_diag_resolved(receiver, object, 0);
             return object;
         }
     }
 
     pthread_mutex_unlock(&proxy_mutex);
+    id string = legacy_constant_string(receiver);
+    if (string) return string;
     /* Old 32-bit CF constant strings are four-word records in __DATA. */
     if (receiver >= bridge_image->cfstring_start &&
         receiver < bridge_image->cfstring_end) {
@@ -1723,6 +1847,27 @@ static bool invoke_simple_message(id receiver, const char *selector_name,
                 ([receiver isKindOfClass:[NSString class]] ||
                  (class_isMetaClass(object_getClass(receiver)) && [(Class)receiver isSubclassOfClass:[NSString class]])))) {
                 *guest_result=proxy_for_string_result(receiver,guest_arguments[0],selector_name,value,string_init);
+                return true;
+            }
+            uint32_t legacy = objc_legacy32_token(value);
+            if (legacy) {
+                /* A native factory/getter can autorelease a guest subclass
+                   without sending autorelease through our guest dispatcher.
+                   Transfer that +0 result to the guest pool before this
+                   import's native pool drains. The weak identity map alone
+                   cannot preserve it. Owned method-family results already
+                   carry the guest's +1; self returns preserve that ownership. */
+                bool owned = objc_method_family(selector_name, "alloc") ||
+                    objc_method_family(selector_name, "new") ||
+                    objc_method_family(selector_name, "copy") ||
+                    objc_method_family(selector_name, "mutableCopy") ||
+                    objc_method_family(selector_name, "init");
+                if (value != receiver && !owned &&
+                    !class_isMetaClass(object_getClass(value))) {
+                    [value retain];
+                    guest_autorelease_add(legacy);
+                }
+                *guest_result = legacy;
                 return true;
             }
             /* SDL makes +[NSArray arrayWithObject:event] for every key event.
@@ -8312,6 +8457,12 @@ int objc_bridge32_run_carbon_input_self_test(void) {
 int objc_bridge32_dispatch(const char *import_name, const uint32_t *arguments,
                            uint64_t *result)
 {
+    /* Scope cleanup runs after the native import pool drains, so a crash
+       during that cleanup still identifies its guest message. */
+    struct objc_diag_scope diagnostic __attribute__((cleanup(objc_diag_end)));
+    diagnostic.enabled = false;
+    if (import_name[0] == '_' && import_name[1] == 'o')
+        objc_diag_begin(&diagnostic, import_name, arguments, guest_autorelease_depth);
     if (strncmp(import_name,"CG",2)==0) {
         char normalized[128]; if(strlen(import_name)+2>sizeof(normalized))return 0;
         normalized[0]='_';strcpy(normalized+1,import_name);
@@ -8421,6 +8572,13 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         if (count > 128) return 0;
         uint32_t args[128]; memcpy(args, arguments, count * 4); args[0] = super[0];
         if(objc_legacy32_super_message(receiver,parent,args,result))return 1;
+        /* Guest overrides can forward autorelease to a native superclass.
+           That path must use the same guest pool as ordinary objc_msgSend. */
+        if (!strcmp(selector, "autorelease") && objc_legacy32_object(super[0])) {
+            guest_autorelease_add(super[0]);
+            *result = super[0];
+            return 1;
+        }
         if (handle_test_activation(receiver, selector, result)) return 1;
         if (getenv("LP32_TRACE_EVENTS") && !strcmp(selector,"sendEvent:")) {
             NSEvent *event=object_for_argument(args[2]);
@@ -10388,7 +10546,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         if ([key isEqualToString:@"vendor-id"]) identifier = UINT32_C(0x106b);
         else if ([key isEqualToString:@"device-id"]) identifier = 1;
         NSData *data = [NSData dataWithBytes:&identifier length:sizeof(identifier)];
-        *result = proxy_for_object(data);
+        *result = proxy_for_owned_object(data);
         return 1;
     }
 
@@ -11638,6 +11796,15 @@ static int objc_bridge32_dispatch_body(const char *import_name,
                 fprintf(stderr, "compat32: alert text: %s\n",
                         [[object_for_argument(arguments[2]) description] UTF8String]);
         }
+        /* Legacy NSString literals have process lifetime. Preserve their
+           original guest identity and keep native pool cleanup from freeing
+           the cached translation when the guest sends ownership messages. */
+        if (receiver && selector_name && legacy_constant_string_address(arguments[0]) &&
+            (!strcmp(selector_name, "retain") || !strcmp(selector_name, "release") ||
+             !strcmp(selector_name, "autorelease") || !strcmp(selector_name, "copy"))) {
+            *result = !strcmp(selector_name, "release") ? 0 : arguments[0];
+            return 1;
+        }
         /* Guest pools span bridge calls. The dispatch pool has
            already drained any nested host pool by then, so keep its guest
            pool token inert; host temporaries retain their per-call lifetime. */
@@ -11660,7 +11827,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         /* Guest-created Cocoa subclasses must live until the guest pool
            drains, not the native pool around this single import. */
         if (selector_name && !strcmp(selector_name, "autorelease") &&
-            guest_autorelease_scope && objc_legacy32_object(arguments[0])) {
+            objc_legacy32_object(arguments[0])) {
             guest_autorelease_add(arguments[0]);
             *result = arguments[0];
             return 1;
@@ -11854,6 +12021,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
             fprintf(stderr,
                     "compat32: Objective-C lookup failed receiver=0x%08x selector=%s\n",
                     arguments[0], selector_name ? selector_name : "(null)");
+            if (!receiver) log_unresolved_objc_receiver(arguments[0]);
             return 0;
         }
         if (!strcmp(selector_name, "setMainFrameURL:") && getenv("LP32_TEST_WEB_CLICK_ID")) {

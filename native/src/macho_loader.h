@@ -35,6 +35,10 @@ struct macho_image32 {
     uint32_t cstring_end;
     uint32_t cfstring_start;
     uint32_t cfstring_end;
+    /* GCC/Clang's -fno-constant-cfstrings uses three-word NSString objects
+       in __OBJC,__cstring_object instead of four-word __DATA,__cfstring. */
+    uint32_t objc_string_start;
+    uint32_t objc_string_end;
     /* __TEXT (the compact-unwind base) and __TEXT,__unwind_info, when present. */
     uint32_t text_start;
     uint32_t text_end;

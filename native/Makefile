@@ -1,6 +1,7 @@
 BUILD_DIR := build
 -include local.mk
 CONTINUE_WHEN_INACTIVE ?= 0
+OBJC_DIAGNOSTICS_DEFAULT ?= 0
 
 # One loader serves every supported title; the bundle targets pick the title
 # with GAME=pirates (default), clonewars, marvel, saga, cod2, cod2mp, cod4, cod4mp,
@@ -199,7 +200,9 @@ $(BUILD_DIR)/game_loader: src/game_loader.c src/guest_context.S src/guest_dyld.c
 	$(CLANG) $(CFLAGS) -I$(BUILD_DIR) $(LDFLAGS) $(filter %.c %.m %.cpp %.S,$^) -lc++ -lffi -lcurl -lz -liconv -framework CoreText -framework Security -framework ForceFeedback -framework OpenAL -framework CFNetwork -framework SystemConfiguration -framework AVFoundation -framework CoreMedia -framework CoreVideo -framework Cocoa -framework Carbon -framework AudioToolbox -framework AudioUnit -framework CoreAudio -framework GameController -framework IOKit -o $@
 	codesign --force --sign - $@
 
-$(BUILD_DIR)/game_loader: src/focus_policy.m
+$(BUILD_DIR)/game_loader: src/focus_policy.m src/objc_diagnostics.c
+
+$(BUILD_DIR)/game_loader: CFLAGS += -DLP32_OBJC_DIAGNOSTICS_DEFAULT=$(OBJC_DIAGNOSTICS_DEFAULT)
 
 # OpenGL is reached through exported trampolines (src/gl_backend.h).
 $(BUILD_DIR)/gl_dispatch.S: tools/gen_gl_dispatch.py lp32gl/data/apple-gl-exports.txt lp32gl/data/apple-cgl-exports.txt | $(BUILD_DIR)
@@ -238,6 +241,22 @@ test-macho-entry: $(BUILD_DIR)/test_macho_entry
 .PHONY: test-objc-proxy
 test-objc-proxy: $(BUILD_DIR)/game_loader
 	env LP32_OBJC_PROXY_SELFTEST=1 LP32_NO_DIAGNOSTIC_LOG=1 arch -x86_64 ./$(BUILD_DIR)/game_loader
+
+.PHONY: test-objc-constant-string
+test-objc-constant-string: $(BUILD_DIR)/game_loader
+	python3 tests/test_objc_constant_string.py
+
+.PHONY: test-objc-lifetime
+test-objc-lifetime: $(BUILD_DIR)/game_loader
+	python3 tests/test_objc_lifetime.py
+
+.PHONY: test-objc-iokit-ownership
+test-objc-iokit-ownership: $(BUILD_DIR)/game_loader
+	python3 tests/test_objc_iokit_ownership.py
+
+.PHONY: test-openssl-legacy
+test-openssl-legacy: $(BUILD_DIR)/game_loader
+	python3 tests/test_openssl_legacy.py
 
 $(BUILD_DIR)/test_arb_sampler_usage: tests/test_arb_sampler_usage.c src/arb_sampler_usage.c src/arb_sampler_usage.h | $(BUILD_DIR)
 	$(CLANG) $(CFLAGS) -Isrc tests/test_arb_sampler_usage.c src/arb_sampler_usage.c -o $@

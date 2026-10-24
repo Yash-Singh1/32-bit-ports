@@ -1,5 +1,6 @@
 #include "objc_legacy_bridge.h"
 #include "objc_bridge.h"
+#include "objc_diagnostics.h"
 #include "focus_policy.h"
 #include "compat_runtime.h"
 #include "game_profile.h"
@@ -25,6 +26,10 @@ struct instance_entry {id native;uint32_t guest;struct class_entry *klass;};
 static struct class_entry classes[512];static unsigned class_count;
 static struct instance_entry instances[4096];static unsigned instance_count;
 static pthread_mutex_t instance_mutex = PTHREAD_MUTEX_INITIALIZER;
+/* Keep only scalar diagnostics, never references that could extend an
+   object's lifetime. Heap reuse can give a later allocation the same token. */
+static struct { uint32_t token, klass, caller; } retired_instances[64];
+static unsigned retired_cursor;
 static bool scanned;
 static struct { uint32_t *values; uint32_t count; } selector_sections[16];
 static unsigned selector_section_count;
@@ -94,10 +99,15 @@ static struct method32 *method(Class native,bool meta,const char *selector){
 void *objc_legacy32_object(uint32_t token){
     pthread_mutex_lock(&instance_mutex);
     id object = nil;
+    uint32_t klass = 0;
     for (unsigned i = 0; i < instance_count; ++i)
-        if (instances[i].guest == token) { object = instances[i].native; break; }
+        if (instances[i].guest == token) {
+            object = instances[i].native;
+            klass = (uint32_t)(uintptr_t)instances[i].klass->guest;
+            break;
+        }
     pthread_mutex_unlock(&instance_mutex);
-    if (object) return object;
+    if (object) { objc_diag_resolved(token, object, klass); return object; }
     for(unsigned i=0;i<class_count;++i)if((uint32_t)(uintptr_t)classes[i].guest==token)return classes[i].native;
     return NULL;
 }
@@ -114,10 +124,38 @@ uint32_t objc_legacy32_token(void *raw){
         if (token) {
             *(uint32_t *)(uintptr_t)token = (uint32_t)(uintptr_t)c->guest;
             instances[instance_count++] = (struct instance_entry){object, token, c};
+            objc_diag_note(OBJC_DIAG_CREATE, token, object, (uint32_t)(uintptr_t)c->guest,
+                           str(c->guest->name), UINT32_MAX);
         }
     }
     pthread_mutex_unlock(&instance_mutex);
     return token;
+}
+void objc_legacy32_log_object(uint32_t token, uint32_t isa) {
+    scan();
+    for (unsigned i = 0; i < class_count; ++i)
+        if ((uint32_t)(uintptr_t)classes[i].guest == isa) {
+            fprintf(stderr, "compat32: Objective-C receiver guest class=%s "
+                    "instance_size=%u native_registered=%d\n",
+                    str(classes[i].guest->name), classes[i].guest->size, classes[i].native != Nil);
+            break;
+        }
+    pthread_mutex_lock(&instance_mutex);
+    bool live = false;
+    for (unsigned i = 0; i < instance_count; ++i)
+        if (instances[i].guest == token) { live = true; break; }
+    fprintf(stderr, "compat32: Objective-C receiver identity=%s live_instances=%u\n",
+            live ? "registered" : "absent", instance_count);
+    for (unsigned i = 0; i < 64; ++i) {
+        unsigned slot = (retired_cursor - 1 - i) % 64;
+        if (token && retired_instances[slot].token == token) {
+            fprintf(stderr, "compat32: Objective-C previous mapping retired "
+                    "class=0x%08x caller=0x%08x (token may have been reused)\n",
+                    retired_instances[slot].klass, retired_instances[slot].caller);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&instance_mutex);
 }
 static size_t guest_size(const char *t){
     switch(*t){case 'v':return 0;case 'd':case 'q':case 'Q':return 8;case '{':
@@ -185,17 +223,28 @@ static void forward(id self,SEL command,NSInvocation *inv){
  * unregister observers and invalidate callbacks before their owners disappear. */
 static void legacy_dealloc(id self, SEL command) {
     uint32_t token=0;
+    struct guest_resume_context frame;
+    uint32_t caller = compat_runtime32_import_frame(&frame) ? frame.eip : 0;
     pthread_mutex_lock(&instance_mutex);
     for(unsigned i=0;i<instance_count;++i)if(instances[i].native==self){token=instances[i].guest;break;}
     pthread_mutex_unlock(&instance_mutex);
     Class cls=object_getClass(self);
     struct class_entry *entry=entry_for_native(cls);
     if(entry)cls=entry->native;
+    objc_diag_note(OBJC_DIAG_DEALLOC, token, self,
+                   entry ? (uint32_t)(uintptr_t)entry->guest : 0,
+                   entry ? str(entry->guest->name) : NULL, UINT32_MAX);
     struct method32 *m=method(cls,false,"dealloc");
     if(m && token){uint32_t args[]={token,m->name};compat_runtime32_call(m->imp,args,2);}
     else {struct objc_super super={self,class_getSuperclass(cls)};((void(*)(struct objc_super *,SEL))objc_msgSendSuper)(&super,command);}
     pthread_mutex_lock(&instance_mutex);
     for(unsigned i=0;i<instance_count;++i)if(instances[i].guest==token && token){
+        unsigned slot = retired_cursor++ % 64;
+        retired_instances[slot].token = token;
+        retired_instances[slot].klass = (uint32_t)(uintptr_t)instances[i].klass->guest;
+        retired_instances[slot].caller = caller;
+        objc_diag_note(OBJC_DIAG_RETIRE, token, self, retired_instances[slot].klass,
+                       str(instances[i].klass->guest->name), UINT32_MAX);
         instances[i]=instances[--instance_count];break;
     }
     pthread_mutex_unlock(&instance_mutex);
@@ -257,6 +306,7 @@ int objc_legacy32_message(const uint32_t *a,uint64_t *out){
     id object=objc_bridge32_host_object(a[0]);if(!object)return 0;
     bool meta=class_isMetaClass(object_getClass(object));
     const char *sel=str(a[1]);struct method32 *m=method(meta?(Class)object:object_getClass(object),meta,sel);if(!m)return 0;
+    objc_diag_method(a[0], m->imp, str(m->types));
     if (!meta && lp32_profile()->title == LP32_TITLE_COD4_MP &&
         !strcmp(sel, "progress:") &&
         !strcmp(class_getName(object_getClass(object)), "DownloadDelegate")) {
@@ -366,6 +416,68 @@ int objc_legacy32_run_lifetime_self_test(void) {
     compat_runtime32_deallocate(guest->name);compat_runtime32_deallocate(metadata);
     if(valid)puts("Legacy Objective-C lifetime self-test: PASS (identity map permits deallocation; guest autorelease scope preserves subclasses)");
     return valid?0:-1;
+}
+
+/* Construct the image's own request class without starting a network request.
+   Run after guest constructors, since ASIHTTPRequest initializes shared state.
+   This checks the factory/retain boundary from issue #13 without the game UI. */
+int objc_legacy32_run_factory_self_test(void) {
+    const char *name = getenv("LP32_OBJC_FACTORY_TEST_CLASS");
+    Class cls = name ? objc_legacy32_class(name) : Nil;
+    if (!cls) return -1;
+    uint64_t pool = 0, result = 0;
+    uint32_t allocate[] = {objc_bridge32_guest_object([NSAutoreleasePool class]),
+                           objc_bridge32_guest_selector("alloc")};
+    bool explicit_pool = getenv("LP32_OBJC_FACTORY_TEST_POOL") != NULL;
+    if (explicit_pool && !objc_bridge32_dispatch("_objc_msgSend", allocate, &pool)) return -1;
+    uint32_t arguments[4] = {objc_bridge32_guest_object(cls),
+        objc_bridge32_guest_selector("requestWithURL:"),
+        objc_bridge32_guest_object([NSURL URLWithString:@"http://127.0.0.1/issue13-not-started"])};
+    if (!objc_bridge32_dispatch("_objc_msgSend", arguments, &result) ||
+        !result || compat_runtime32_last_call_trapped()) return -1;
+    uint32_t token = (uint32_t)result;
+    arguments[0] = token;
+    arguments[1] = objc_bridge32_guest_selector("retain");
+    if (!objc_bridge32_dispatch("_objc_msgSend", arguments, &result) || result != token ||
+        compat_runtime32_last_call_trapped() || !objc_legacy32_object(token)) return -1;
+    const char *data_function = getenv("LP32_OBJC_FACTORY_TEST_DATA_FUNCTION");
+    if (data_function) {
+        char *end = NULL;
+        unsigned long address = strtoul(data_function, &end, 0);
+        const struct macho_image32 *image = compat_runtime32_image();
+        if (!end || *end || address < image->min_address || address >= image->max_address) return -1;
+        uint32_t data = compat_runtime32_call((uint32_t)address, NULL, 0);
+        if (!data || compat_runtime32_last_call_trapped()) return -1;
+        uint32_t message[4] = {data, objc_bridge32_guest_selector("autorelease"), 0, 0};
+        if (!objc_bridge32_dispatch("_objc_msgSend", message, &result)) return -1;
+        message[1] = objc_bridge32_guest_selector("getBytes:length:");
+        message[2] = compat_runtime32_allocate(8, 1); message[3] = 6;
+        if (!message[2] || !objc_bridge32_dispatch("_objc_msgSend", message, &result) ||
+            compat_runtime32_last_call_trapped()) return -1;
+        compat_runtime32_deallocate(message[2]);
+        puts("Guest IOKit data self-test: PASS (CreateCFProperty/autorelease/getBytes)");
+    }
+    const char *function = getenv("LP32_OBJC_FACTORY_TEST_FUNCTION");
+    if (function) {
+        char *end = NULL;
+        unsigned long address = strtoul(function, &end, 0);
+        const struct macho_image32 *image = compat_runtime32_image();
+        if (!end || *end || address < image->min_address || address >= image->max_address) return -1;
+        compat_runtime32_call((uint32_t)address, NULL, 0);
+        if (compat_runtime32_last_call_trapped()) return -1;
+    }
+    if (explicit_pool) {
+        uint32_t drain[] = {(uint32_t)pool, objc_bridge32_guest_selector("drain")};
+        if (!objc_bridge32_dispatch("_objc_msgSend", drain, &result) ||
+            !objc_legacy32_object(token)) return -1;
+    }
+    arguments[1] = objc_bridge32_guest_selector("release");
+    if (!objc_bridge32_dispatch("_objc_msgSend", arguments, &result) ||
+        compat_runtime32_last_call_trapped()) return -1;
+    if (explicit_pool && objc_legacy32_object(token)) return -1;
+    printf("Guest request factory self-test: PASS (class=%s, pool=%s, factory/retain/release; no request started)\n",
+        name, explicit_pool ? "explicit" : "fallback");
+    return 0;
 }
 
 /* Exercise the shipped i386 DownloadDelegate, including its native callbacks

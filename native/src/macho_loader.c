@@ -229,6 +229,17 @@ static int inspect_commands(const struct source_file *source,
                     image->cfstring_end = section[section_index].addr +
                                           section[section_index].size;
                 }
+                if (strncmp(segment->segname, "__OBJC", 16) == 0 &&
+                    strncmp(section[section_index].sectname, "__cstring_object", 16) == 0) {
+                    uint32_t address = section[section_index].addr;
+                    uint32_t size = section[section_index].size;
+                    if (!(segment->initprot & VM_PROT_READ) || address < segment->vmaddr ||
+                        !range_inside(address - segment->vmaddr, size, segment->filesize) ||
+                        size % 12 != 0)
+                        return fail_message("invalid legacy Objective-C constant-string section");
+                    image->objc_string_start = address;
+                    image->objc_string_end = address + size;
+                }
             }
         } else if (command->cmd == LC_MAIN) {
             if (command->cmdsize < sizeof(struct entry_point_command) || main_entry) {

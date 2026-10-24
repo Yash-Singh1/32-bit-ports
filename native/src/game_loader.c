@@ -7,6 +7,7 @@
 #include "game_profile.h"
 #include "macho_loader.h"
 #include "objc_bridge.h"
+#include "objc_diagnostics.h"
 #include "hitch_recorder.h"
 #include "host_diagnostics.h"
 #include "steam_bridge.h"
@@ -58,6 +59,56 @@ static int guest_diagnostic_fd = -1;
     } while (0)
 
 static void flush_guest_instruction(uintptr_t address);
+
+/* Capture dyld metadata before guest execution. The signal handler only reads
+   this snapshot; querying dyld while a fault interrupted its lock can hang. */
+static struct native_image_diagnostic {
+    uintptr_t start, end;
+    char name[160], uuid[33];
+} native_image_diagnostics[512];
+static unsigned native_image_diagnostic_count;
+
+static void capture_native_image_diagnostics(void)
+{
+    unsigned count = 0;
+    for (uint32_t i = 0; i < _dyld_image_count() && count < 512; ++i) {
+        const struct mach_header_64 *header = (const void *)_dyld_get_image_header(i);
+        if (!header || header->magic != MH_MAGIC_64) continue;
+        struct native_image_diagnostic *image = &native_image_diagnostics[count];
+        const struct load_command *command = (const void *)(header + 1);
+        for (uint32_t j = 0; j < header->ncmds; ++j) {
+            if (command->cmd == LC_SEGMENT_64) {
+                const struct segment_command_64 *segment = (const void *)command;
+                if (!strcmp(segment->segname, "__TEXT")) {
+                    image->start = segment->vmaddr + _dyld_get_image_vmaddr_slide(i);
+                    image->end = image->start + segment->vmsize;
+                }
+            } else if (command->cmd == LC_UUID) {
+                const struct uuid_command *uuid = (const void *)command;
+                for (unsigned k = 0; k < 16; ++k)
+                    snprintf(image->uuid + k * 2, 3, "%02x", uuid->uuid[k]);
+            }
+            command = (const void *)((const char *)command + command->cmdsize);
+        }
+        const char *name = _dyld_get_image_name(i);
+        snprintf(image->name, sizeof(image->name), "%s", name ? name : "?");
+        if (image->start) ++count;
+    }
+    native_image_diagnostic_count = count;
+}
+
+static void report_native_image(uintptr_t address)
+{
+    for (unsigned i = 0; i < native_image_diagnostic_count; ++i) {
+        const struct native_image_diagnostic *image = &native_image_diagnostics[i];
+        if (address >= image->start && address < image->end) {
+            GUEST_DIAGNOSTIC("compat32: native image=%s base=0x%016llx offset=0x%llx uuid=%s\n",
+                image->name, (unsigned long long)image->start,
+                (unsigned long long)(address - image->start), image->uuid);
+            return;
+        }
+    }
+}
 
 static void open_guest_diagnostic_log(const char *executable_path)
 {
@@ -586,6 +637,11 @@ static void guest_crash_diagnostic(int signal_number, siginfo_t *info,
             return;
         }
         if (rip == guest_breakpoint_address + 1) {
+            if (getenv("LP32_TEST_EXIT_AT_GUEST_BREAKPOINT")) {
+                GUEST_DIAGNOSTIC("compat32: test reached guest breakpoint 0x%08lx\n",
+                                 (unsigned long)guest_breakpoint_address);
+                _Exit(EXIT_SUCCESS);
+            }
             /* LP32_TRACE_GUEST_AFTER=<seconds> ignores hits until then. */
             bool early = guest_breakpoint_after > 0 &&
                 (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - guest_breakpoint_armed_ns) / 1e9 <
@@ -709,6 +765,7 @@ static void guest_crash_diagnostic(int signal_number, siginfo_t *info,
         for (unsigned i = 0; i < 16; ++i) {
             GUEST_DIAGNOSTIC("compat32: native return[%u]=0x%016llx\n",
                             i, (unsigned long long)address);
+            report_native_image(address);
             /* Symbol lookup can acquire dyld locks. Keep it opt-in; the
                bounded raw frame walk is sufficient for offline symbolication. */
             if (getenv("LP32_TRACE_NATIVE_CRASH")) {
@@ -744,6 +801,16 @@ static void guest_crash_diagnostic(int signal_number, siginfo_t *info,
             context->uc_mcontext->__ss.__rdi,
             context->uc_mcontext->__ss.__rbp,
             context->uc_mcontext->__ss.__r14);
+    uint64_t native_words[8];
+    mach_vm_size_t native_count = 0;
+    if (rsp > UINT32_MAX && mach_vm_read_overwrite(mach_task_self(), rsp,
+            sizeof(native_words), (mach_vm_address_t)native_words, &native_count) == KERN_SUCCESS &&
+            native_count == sizeof(native_words)) {
+        for (unsigned i = 0; i < 8; ++i)
+            GUEST_DIAGNOSTIC("compat32: native stack[%u]=0x%016llx\n", i,
+                            (unsigned long long)native_words[i]);
+    }
+    objc_diag_crash_report(STDERR_FILENO, guest_diagnostic_fd);
     /* An allocator trap (caulk's maybe_create_free_node) leaves the bad
        block in rsi/rax: say whether it is one of the bridge's audio buffers. */
     const uint64_t suspects[] = {context->uc_mcontext->__ss.__rsi, context->uc_mcontext->__ss.__rax,
@@ -974,6 +1041,7 @@ int main(int argc, char **argv)
     compat_runtime32_reserve_guest_arena();
     signal(SIGPIPE, SIG_IGN);
     install_guest_crash_diagnostics();
+    capture_native_image_diagnostics();
     compat_runtime32_set_diagnostic_sink(runtime_diagnostic_line);
     if (getenv("LP32_FOCUS_SELFTEST")) {
         int expected = atoi(getenv("LP32_FOCUS_SELFTEST"));
@@ -1349,6 +1417,9 @@ int main(int argc, char **argv)
     if (!initialization_trapped) {
         printf("initializers completed: %" PRIu32 "/%" PRIu32 "\n",
                image.initializer_count, image.initializer_count);
+        if (getenv("LP32_OBJC_FACTORY_TEST_CLASS")) {
+            return objc_legacy32_run_factory_self_test() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+        }
         if (getenv("LP32_INITIALIZERS_SELFTEST")) {
             macho_image32_unload(&image);
             return EXIT_SUCCESS;

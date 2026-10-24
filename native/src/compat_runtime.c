@@ -6456,12 +6456,15 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
     if (import_is(name, "_IORegistryEntryCreateIterator")) return IORegistryEntryCreateIterator(arguments[0], (const char *)(uintptr_t)arguments[1], arguments[2], (io_iterator_t *)(uintptr_t)arguments[3]);
     if (import_is(name, "_IORegistryEntryCreateCFProperty")) {
         CFTypeRef value = IORegistryEntryCreateCFProperty(arguments[0], objc_bridge32_host_object(arguments[1]), NULL, arguments[3]);
-        uint32_t token = objc_bridge32_guest_object((void *)value); if (value) CFRelease(value); return token;
+        /* A Create result owns a guest reference. A borrowed/pinned proxy
+           would let objc autorelease free its sole native bridge reference
+           at the import boundary while leaving a dangling registered token. */
+        uint32_t token = objc_bridge32_guest_owned_object((void *)value); if (value) CFRelease(value); return token;
     }
     if (import_is(name, "_IORegistryEntryCreateCFProperties") && arguments[0]) {
         CFMutableDictionaryRef dict = NULL;
         kern_return_t r = IORegistryEntryCreateCFProperties(arguments[0], &dict, NULL, arguments[3]);
-        if (arguments[1]) *(uint32_t *)(uintptr_t)arguments[1] = objc_bridge32_guest_object(dict);
+        if (arguments[1]) *(uint32_t *)(uintptr_t)arguments[1] = objc_bridge32_guest_owned_object(dict);
         if (dict) CFRelease(dict); return r;
     }
     if (import_is(name, "_IONotificationPortCreate") ||
