@@ -1249,6 +1249,11 @@ int main(int argc, char **argv)
         macho_image32_unload(&image);
         return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
+    if (getenv("LP32_CARBON_ALERT_SELFTEST")) {
+        int result = carbon_bridge32_run_alert_self_test();
+        macho_image32_unload(&image);
+        return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (getenv("LP32_CARBON_INPUT_SELFTEST")) {
         int result = objc_bridge32_run_carbon_input_self_test();
         macho_image32_unload(&image);

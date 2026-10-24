@@ -1965,6 +1965,25 @@ int carbon_bridge32_dispatch(const char *name, const uint32_t *a,
       *(uint32_t *)P(index) = wrap(dialog);
     return 1;
   }
+  if (IS("_RunStandardAlert")) {
+    /* COD4's hardware-change prompt has no ModalFilterUPP. A guest filter
+       cannot be passed to the native event loop as a 64-bit callback. */
+    if (a[1]) return 0;
+    struct carbon_ref *alert = reference(a[0]);
+    if (!alert || !alert->host) { *out = (uint32_t)paramErr; return 1; }
+    int16_t item = 0;
+    int32_t status = F(int32_t, void *, void *, int16_t *)(alert->host, NULL, &item);
+    if (a[2]) *(int16_t *)P(2) = item;
+    /* RunStandardAlert disposes its dialog. Do not leave its old host
+       pointer available through a guest token after successful completion. */
+    if (!status) {
+      struct carbon_ref **link = &references;
+      while (*link && *link != alert) link = &(*link)->next;
+      if (*link) { *link = alert->next; free(alert); }
+    }
+    *out = (uint32_t)status;
+    return 1;
+  }
   if (IS("_GetDialogWindow")) {
     *out = wrap(F(void *, void *)(unwrap(a[0])));
     return 1;
@@ -3469,7 +3488,61 @@ done:
   return passed;
 }
 
-/* Uses hidden native windows to verify the guest coordinate contract. */
+/* Exercise the native modal loop with timed clicks on real Carbon buttons. */
+struct alert_test_click { void *dialog; int16_t item; bool sent; };
+static void click_test_alert(CFRunLoopTimerRef timer, void *context) {
+  struct alert_test_click *click = context;
+  void *control = NULL;
+  int32_t status = ((int32_t (*)(void *, int16_t, void **))symbol("_GetDialogItemAsControl"))(
+      click->dialog, click->item, &control);
+  if (status || !control) _Exit(91);
+  click->sent = true;
+  CFRunLoopTimerInvalidate(timer);
+  int16_t part = 0;
+  status = ((int32_t (*)(void *, int16_t, uint32_t, int16_t *))symbol("_HIViewSimulateClick"))(
+      control, kControlButtonPart, 0, &part);
+  if (status) _Exit(92);
+}
+int carbon_bridge32_run_alert_self_test(void) {
+  uint32_t memory = compat_runtime32_allocate(64, 1);
+  if (!memory) return -1;
+  uint64_t out = 0;
+  int result = -1;
+  for (int16_t button = 1; button <= 3; ++button) {
+    uint32_t args[5] = {memory, 1};
+    if (!carbon_bridge32_dispatch("_GetStandardAlertDefaultParams", args, &out) || out) goto done;
+    struct alert_params32 *params = (void *)(uintptr_t)memory;
+    params->default_text = objc_bridge32_guest_object((void *)CFSTR("Use optimal settings"));
+    params->cancel_text = objc_bridge32_guest_object((void *)CFSTR("Keep my settings"));
+    params->other_text = objc_bridge32_guest_object((void *)CFSTR("Other"));
+    params->default_button = 1; params->cancel_button = 2;
+    args[0] = 1;
+    args[1] = objc_bridge32_guest_object((void *)CFSTR("COD4 alert bridge test"));
+    args[2] = objc_bridge32_guest_object((void *)CFSTR("Automated native button selection"));
+    args[3] = memory; args[4] = memory + 40;
+    if (!carbon_bridge32_dispatch("_CreateStandardAlert", args, &out) || out) goto done;
+    uint32_t token = *(uint32_t *)(uintptr_t)(memory + 40);
+    struct alert_test_click click = {.dialog = unwrap(token), .item = button};
+    CFRunLoopTimerContext context = {.info = &click};
+    CFRunLoopTimerRef timer = CFRunLoopTimerCreate(NULL, CFAbsoluteTimeGetCurrent() + .1, 0,
+                                                 0, 0, click_test_alert, &context);
+    CFRunLoopAddTimer(CFRunLoopGetCurrent(), timer, kCFRunLoopCommonModes);
+    CFRunLoopAddTimer(CFRunLoopGetCurrent(), timer, CFSTR("NSModalPanelRunLoopMode"));
+    *(uint32_t *)(uintptr_t)(memory + 48) = 0xa1b2c3d4;
+    args[0] = token; args[1] = 0; args[2] = memory + 48;
+    bool handled = carbon_bridge32_dispatch(button == 2 ? "RunStandardAlert" : "_RunStandardAlert", args, &out);
+    CFRunLoopTimerInvalidate(timer); CFRelease(timer);
+    if (!handled || out || !click.sent || *(int16_t *)(uintptr_t)(memory + 48) != button ||
+        *(uint16_t *)(uintptr_t)(memory + 50) != 0xa1b2 || reference(token)) goto done;
+    if (!carbon_bridge32_dispatch("_RunStandardAlert", args, &out) || (int32_t)out != paramErr) goto done;
+  }
+  result = 0;
+done:
+  compat_runtime32_deallocate(memory);
+  fprintf(stderr, "Carbon standard alert %s (three native button responses, 16-bit result, disposed dialog, dynamic import)\n",
+          result ? "FAIL" : "PASS");
+  return result;
+}
 int carbon_bridge32_run_geometry_self_test(void) {
   uint32_t memory = compat_runtime32_allocate(128, 1);
   if (!memory)

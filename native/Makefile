@@ -258,6 +258,10 @@ test-objc-iokit-ownership: $(BUILD_DIR)/game_loader
 test-openssl-legacy: $(BUILD_DIR)/game_loader
 	python3 tests/test_openssl_legacy.py
 
+.PHONY: test-carbon-standard-alert
+test-carbon-standard-alert: $(BUILD_DIR)/game_loader
+	python3 tests/test_carbon_standard_alert.py
+
 $(BUILD_DIR)/test_arb_sampler_usage: tests/test_arb_sampler_usage.c src/arb_sampler_usage.c src/arb_sampler_usage.h | $(BUILD_DIR)
 	$(CLANG) $(CFLAGS) -Isrc tests/test_arb_sampler_usage.c src/arb_sampler_usage.c -o $@
 

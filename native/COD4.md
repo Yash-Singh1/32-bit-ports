@@ -72,6 +72,14 @@ uses the supplied issue #13 image in a converted app with its private runtime.
 It validates the image hash before using diagnostic addresses and stops before
 starting a network request. The repository and converter contain no game files.
 
+The Steam hardware-change prompt, "Set Optimal Settings?", uses
+`RunStandardAlert` with no modal filter. The bridge now runs that native alert,
+returns the chosen 16-bit button index, and retires the disposed dialog token.
+`make -C native test-carbon-standard-alert` checks real native OK, Cancel and
+Other clicks, result-buffer boundaries, token retirement and dynamic lookup.
+This addresses a dev.5 report that trapped at `_RunStandardAlert` on macOS 27;
+the native-dialog regression runs locally on macOS 26.5.2.
+
 ## Validation status
 
 The Steam build is an experimental port with campaign and local multiplayer smoke tests.
