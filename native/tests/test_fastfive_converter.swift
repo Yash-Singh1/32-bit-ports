@@ -31,6 +31,11 @@ struct FastFiveConverterTests {
         try Data([1]).write(to: pack)
         try check(try FastFiveSource.discover(app).app.path == app.resolvingSymlinksInPath().path)
         try check(try FastFiveSource.discover(root).app.resolvingSymlinksInPath().path == app.resolvingSymlinksInPath().path)
+        try check(try FastFiveSource.discover(app).receipt == nil)
+        let receipt = contents.appendingPathComponent("_MASReceipt/receipt")
+        try fm.createDirectory(at: receipt.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([0x30]).write(to: receipt)
+        try check(try FastFiveSource.discover(app).receipt?.lastPathComponent == "receipt")
         info["CFBundleIdentifier"] = "com.gameloft.asphalt6mac"
         try writeInfo()
         try rejects { _ = try FastFiveSource.discover(app) }
@@ -53,6 +58,6 @@ struct FastFiveConverterTests {
         try rejects { _ = try FastFiveSource.discover(app) }
         try check(FastFiveSource.isArchive(URL(fileURLWithPath: "Fast_Five_1.0.ZIP")))
         try check(FastFiveSource.isArchive(URL(fileURLWithPath: "FastFive.dmg")))
-        print("PASS: Fast Five source identity, original-only conversion, data validation and i386 requirement")
+        print("PASS: Fast Five source identity, original-only conversion, data validation, App Store receipt and i386 requirement")
     }
 }

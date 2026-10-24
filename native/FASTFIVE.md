@@ -3,7 +3,10 @@
 This port targets Gameloft's Mac App Store release of Fast Five: The Movie
 Official Game, bundle identifier `com.gameloft.fastfivemac`. The tested
 archive, `Fast_Five_1.0.zip`, contains `FastFive.app`, version 1.0.0, with an
-i386 Mach-O executable and packed data in `Contents/Resources/res`.
+i386 Mach-O executable and packed data in `Contents/Resources/res`. That copy
+has no App Store receipt, and its receipt check is replaced with `return 1`
+(the 6 bytes at `0x4d8e9d`). The App Store copy has the same executable
+without that change, plus `Contents/_MASReceipt/receipt`.
 
 ## Build and convert
 
@@ -97,6 +100,44 @@ the display mode, which stays native here. As with Gangstar:
   the right and bottom edges. Positions are now mapped through the fitted
   view to the resolution and clamped to it.
 
+### App Store receipt
+
+The App Store copy validates its receipt at launch and calls `exit(173)` on
+any failure, which on a 2011 Mac asked the App Store to fetch a receipt. A
+converted copy quit silently. It ran from an app without `_MASReceipt`, and
+the check uses Security keychain and `libcrypto.0.9.8` functions that macOS
+no longer has. The check:
+
+1. changes to `<bundle>/Contents/_MASReceipt` and reads `receipt`;
+2. looks up "Apple Root CA" in `SystemRootCertificates.keychain` for an
+   OpenSSL certificate store;
+3. decodes the receipt with `d2i_PKCS7_bio`, requires signed data with
+   `id-data` content, and calls `PKCS7_verify`, but does not check its result;
+4. parses the content with `ASN1_get_object`. The bundle identifier must be
+   `com.gameloft.fastfivemac` and the version must equal the app's
+   `CFBundleShortVersionString`. The hash must equal SHA-1 of the `en0` MAC
+   address (`IOMACAddress` in the I/O Registry), the opaque value and the
+   bundle identifier's DER.
+
+The converter copies the receipt into the converted app's `_MASReceipt`. The
+loader decodes PKCS7 messages, BER as receipts are encoded, with Security's
+CMS decoder into OpenSSL 0.9.8's i386 `PKCS7` and `ASN1_STRING` layouts.
+`ASN1_get_object` follows 0.9.8, and `PKCS7_verify` checks the signature and
+trust. The keychain lookup reports the keychain as unavailable, which the
+game handles. Its certificate store only feeds the unchecked
+`PKCS7_verify`.
+
+The hash also needed `-[NSData bytes]` and `-[NSMutableData mutableBytes]`.
+The first returned a host address truncated to 32 bits, and the second a
+pointer proxy, so SHA-1 read and wrote the wrong memory. `bytes` now returns
+a guest copy of host-stored data. `NSMutableData`'s `data`, `new`,
+`dataWithLength:` and `dataWithCapacity:` create data stored in guest
+memory, so `mutableBytes` writes reach the object.
+
+A receipt issued for another Mac fails the hash, as it did originally.
+`exit` now logs the guest return address, and `0x004d9bff` is the hash
+comparison.
+
 The game keeps its saves in `~/Library/<CFBundleName>`, so the converter
 keeps `CFBundleName` (`FastFive`). Settings use
 `com.gameloft.fastfivemac.compat`, and the generated app logs to
@@ -129,11 +170,18 @@ cursor reached the right and bottom edges, and menu clicks hit their targets.
 On the external 1920x1200 display, a 1728x1117 resolution saved on the panel
 is fitted to 1856x1200.
 
-Audio, controllers, multiplayer, full races, career mode
-and long sessions remain unverified, as does the Mac App Store receipt path.
+Without an App Store copy, the receipt path was tested on the tested
+executable with its original 6 bytes restored and a receipt signed by a test
+certificate, made for this Mac's `en0` address. With it, a converted copy and
+an isolated probe passed the check and reached the title and the menu. A
+receipt for another address exited with 173 at the hash comparison.
+`make test-receipt-bridge` decodes DER and BER test messages.
+
+Audio, controllers, multiplayer, full races, career mode and long sessions
+remain unverified, as does a real App Store receipt.
 
 ```sh
-make -C native test-fastfive-converter test-game-profile test-asphalt6-glsl test-gl-core-bridge test-objc-proxy test-display-bridge
+make -C native test-fastfive-converter test-game-profile test-asphalt6-glsl test-gl-core-bridge test-objc-proxy test-display-bridge test-receipt-bridge
 ```
 
 Automated game launches should use `LP32_BACKGROUND_TEST=1 LP32_MUTE_AUDIO=1

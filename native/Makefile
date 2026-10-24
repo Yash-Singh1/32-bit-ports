@@ -339,6 +339,23 @@ test-display-bridge: $(BUILD_DIR)/game_loader
 test-objc-proxy: $(BUILD_DIR)/game_loader
 	env LP32_OBJC_PROXY_SELFTEST=1 LP32_NO_DIAGNOSTIC_LOG=1 arch -x86_64 ./$(BUILD_DIR)/game_loader
 
+# A signed receipt-shaped message, SET { SEQUENCE { 2, 1, OCTET STRING "A" } },
+# in DER and, as App Store receipts are, BER with indefinite lengths.
+.PHONY: test-receipt-bridge
+test-receipt-bridge: $(BUILD_DIR)/game_loader
+	mkdir -p $(BUILD_DIR)/receipt-test
+	printf '\061\013\060\011\002\001\002\002\001\001\004\001\101' > $(BUILD_DIR)/receipt-test/payload
+	/usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=LP32 receipt test" \
+	    -keyout $(BUILD_DIR)/receipt-test/key.pem -out $(BUILD_DIR)/receipt-test/cert.pem 2>/dev/null
+	/usr/bin/openssl smime -sign -binary -nodetach -outform DER -in $(BUILD_DIR)/receipt-test/payload \
+	    -signer $(BUILD_DIR)/receipt-test/cert.pem -inkey $(BUILD_DIR)/receipt-test/key.pem \
+	    -out $(BUILD_DIR)/receipt-test/receipt
+	/usr/bin/openssl smime -sign -binary -nodetach -stream -outform DER -in $(BUILD_DIR)/receipt-test/payload \
+	    -signer $(BUILD_DIR)/receipt-test/cert.pem -inkey $(BUILD_DIR)/receipt-test/key.pem \
+	    -out $(BUILD_DIR)/receipt-test/receipt.ber
+	env LP32_RECEIPT_SELFTEST=$(BUILD_DIR)/receipt-test/receipt LP32_NO_DIAGNOSTIC_LOG=1 arch -x86_64 ./$(BUILD_DIR)/game_loader
+	env LP32_RECEIPT_SELFTEST=$(BUILD_DIR)/receipt-test/receipt.ber LP32_NO_DIAGNOSTIC_LOG=1 arch -x86_64 ./$(BUILD_DIR)/game_loader
+
 $(BUILD_DIR)/test_arb_sampler_usage: tests/test_arb_sampler_usage.c src/arb_sampler_usage.c src/arb_sampler_usage.h | $(BUILD_DIR)
 	$(CLANG) $(CFLAGS) -Isrc tests/test_arb_sampler_usage.c src/arb_sampler_usage.c -o $@
 

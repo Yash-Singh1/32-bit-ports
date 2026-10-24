@@ -4658,8 +4658,9 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
      * host/guest teardown callbacks.
      */
     if (import_is(name, "_exit") || import_is(name, "__exit")) {
-        fprintf(stderr, "compat32: guest requested process exit status=%d\n",
-                (int)arguments[0]);
+        /* arguments[-1] is the guest's return address. */
+        fprintf(stderr, "compat32: guest requested process exit status=%d from 0x%08x\n",
+                (int)arguments[0], arguments[-1]);
         compat_runtime32_heap_report("guest-exit");
         cg_report("guest-exit");
         fflush(NULL);

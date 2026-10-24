@@ -15,6 +15,14 @@ struct FastFiveSource {
     var contents: URL { app.appendingPathComponent("Contents") }
     var resources: URL { contents.appendingPathComponent("Resources") }
     var image: URL { contents.appendingPathComponent("MacOS/" + (info["CFBundleExecutable"] as? String ?? "")) }
+    /// The Mac App Store copy checks its receipt at launch and quits without
+    /// it, as in Contents/_MASReceipt/receipt of the original app.
+    var receipt: URL? {
+        let receipt = contents.appendingPathComponent("_MASReceipt/receipt")
+        var directory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: receipt.path, isDirectory: &directory) && !directory.boolValue ?
+            receipt : nil
+    }
 
     static func isDiskImage(_ url: URL) -> Bool { url.pathExtension.lowercased() == "dmg" }
     static func isArchive(_ url: URL) -> Bool {
@@ -127,6 +135,11 @@ extension Converter {
         progress("Copying \(FastFive.title)…", "Creating your app. This creates an independent copy of the game files.")
         // The game reads its packed res/ data and MainWindow_Mac.nib from Resources.
         try copyGameTree(layout.resources, to: output.appendingPathComponent("Resources"), check: cancellation.check)
+        // The game reads the receipt from the bundle it runs as.
+        if let receipt = layout.receipt {
+            try fm.createDirectory(at: output.appendingPathComponent("_MASReceipt"), withIntermediateDirectories: false)
+            try fm.copyItem(at: receipt, to: output.appendingPathComponent("_MASReceipt/receipt"))
+        }
         let imagePath = output.appendingPathComponent("SharedSupport/" + stem + ".image")
         try gameImage.write(to: imagePath)
         try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: imagePath.path)

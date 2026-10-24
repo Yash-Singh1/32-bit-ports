@@ -927,6 +927,97 @@ static uint32_t guest_bytes_for_data(NSData *data)
     }
 }
 
+/* -[NSData bytes] and -[NSMutableData mutableBytes] return host memory,
+   above the guest's 4 GB.  Mutable data the guest creates through
+   NSMutableData's factory methods is stored in guest memory instead, so
+   writes through mutableBytes reach the object (Fast Five hashes into
+   [NSMutableData dataWithLength:20] and compares it with isEqualToData:).
+   NSMutableData subclasses provide the four primitives. */
+@interface LP32GuestMutableData : NSMutableData {
+    uint32_t guest;
+    NSUInteger length, capacity;
+}
+@end
+@implementation LP32GuestMutableData
+- (instancetype)lp32_storeLength:(NSUInteger)wanted capacity:(NSUInteger)room
+{
+    capacity = MAX(room, wanted) ? MAX(room, wanted) : 1;
+    guest = capacity <= UINT32_MAX ? compat_runtime32_allocate(capacity, 1) : 0;
+    if (!guest) { [self release]; return nil; }
+    length = wanted;
+    return self;
+}
+- (instancetype)initWithCapacity:(NSUInteger)wanted
+{
+    if (!(self = [super init])) return nil;
+    return [self lp32_storeLength:0 capacity:wanted];
+}
+- (instancetype)initWithLength:(NSUInteger)wanted
+{
+    if (!(self = [super init])) return nil;
+    return [self lp32_storeLength:wanted capacity:wanted];
+}
+- (instancetype)init
+{
+    if (!(self = [super init])) return nil;
+    return [self lp32_storeLength:0 capacity:0];
+}
+- (void)dealloc
+{
+    if (guest) compat_runtime32_deallocate(guest);
+    [super dealloc];
+}
+- (NSUInteger)length { return length; }
+- (const void *)bytes { return (const void *)(uintptr_t)guest; }
+- (void *)mutableBytes { return (void *)(uintptr_t)guest; }
+- (void)setLength:(NSUInteger)wanted
+{
+    if (wanted > capacity) {
+        NSUInteger grown = MAX(wanted, capacity * 2);
+        if (grown > UINT32_MAX) [NSException raise:NSMallocException format:@"guest data too large"];
+        uint32_t moved = compat_runtime32_reallocate(guest, grown);
+        if (!moved) [NSException raise:NSMallocException format:@"guest data allocation failed"];
+        guest = moved;
+        capacity = grown;
+    }
+    if (wanted > length) memset((char *)(uintptr_t)guest + length, 0, wanted - length);
+    length = wanted;
+}
+@end
+
+static bool guest_data_message(id receiver, const char *selector, const uint32_t *arguments, uint64_t *result)
+{
+    if (receiver == [NSMutableData class]) {
+        LP32GuestMutableData *data = nil;
+        if (!strcmp(selector, "data") || !strcmp(selector, "new"))
+            data = [[LP32GuestMutableData alloc] initWithCapacity:0];
+        else if (!strcmp(selector, "dataWithLength:"))
+            data = [[LP32GuestMutableData alloc] initWithLength:arguments[2]];
+        else if (!strcmp(selector, "dataWithCapacity:"))
+            data = [[LP32GuestMutableData alloc] initWithCapacity:arguments[2]];
+        else return false;
+        if (!data) { *result = 0; return true; }
+        if (selector[0] != 'n') [data autorelease];
+        *result = proxy_for_object(data);
+        if (selector[0] == 'n') [data release];
+        return true;
+    }
+    bool mutable_bytes = !strcmp(selector, "mutableBytes");
+    if ((!mutable_bytes && strcmp(selector, "bytes")) || ![receiver isKindOfClass:[NSData class]])
+        return false;
+    const void *bytes = mutable_bytes ? [(NSMutableData *)receiver mutableBytes] : [(NSData *)receiver bytes];
+    if ((uintptr_t)bytes <= UINT32_MAX) {
+        *result = (uintptr_t)bytes;
+    } else {
+        /* A copy is right for reading; writes to it do not reach the data. */
+        if (mutable_bytes && getenv("LP32_TRACE_OBJC_SELECTORS"))
+            fprintf(stderr, "compat32: mutableBytes of host-stored %s returns a copy\n",
+                    class_getName(object_getClass(receiver)));
+        *result = guest_bytes_for_data(receiver);
+    }
+    return true;
+}
+
 /* On the x86_64 host, exhausted register banks make va_arg consume this
  * widened overflow area. i386 arguments always arrive as stack words. */
 static CFStringRef format_cf_string32(CFStringRef format, const uint32_t *guest) {
@@ -1257,6 +1348,38 @@ int objc_bridge32_run_proxy_self_test(void)
             fputs("compat32: mutable CFData refresh self-test failed\n", stderr);
             return -1;
         }
+        /* Guest pointers from -bytes, and writes through -mutableBytes of
+           data the guest created, which an i386 caller fills in place. */
+        uint32_t bytes_selector = compat_runtime32_copy_cstring("bytes");
+        uint32_t mutable_selector = compat_runtime32_copy_cstring("mutableBytes");
+        uint32_t length_selector = compat_runtime32_copy_cstring("dataWithLength:");
+        const uint32_t host_bytes_args[] = {data_args[0], bytes_selector};
+        uint64_t host_bytes = 0, created = 0, writable = 0;
+        const uint32_t create_args[] = {proxy_for_object([NSMutableData class]), length_selector, 20};
+        if (!bytes_selector || !mutable_selector || !length_selector ||
+            !objc_bridge32_dispatch("_objc_msgSend", host_bytes_args, &host_bytes) ||
+            !host_bytes || host_bytes > UINT32_MAX ||
+            memcmp((void *)(uintptr_t)host_bytes, "data appended", 13) ||
+            !objc_bridge32_dispatch("_objc_msgSend", create_args, &created) || !created) {
+            fputs("compat32: NSData bytes self-test failed\n", stderr);
+            return -1;
+        }
+        const uint32_t mutable_args[] = {(uint32_t)created, mutable_selector};
+        NSMutableData *created_data = object_for_receiver((uint32_t)created);
+        if (!objc_bridge32_dispatch("_objc_msgSend", mutable_args, &writable) ||
+            !writable || writable > UINT32_MAX || created_data.length != 20) {
+            fputs("compat32: NSMutableData mutableBytes self-test failed\n", stderr);
+            return -1;
+        }
+        memcpy((void *)(uintptr_t)writable, "twenty guest bytes!!", 20);
+        [created_data appendBytes:"+" length:1];
+        if (![created_data isEqualToData:[NSData dataWithBytes:"twenty guest bytes!!+" length:21]]) {
+            fputs("compat32: guest-stored NSMutableData self-test failed\n", stderr);
+            return -1;
+        }
+        compat_runtime32_deallocate(bytes_selector);
+        compat_runtime32_deallocate(mutable_selector);
+        compat_runtime32_deallocate(length_selector);
 
         uint32_t persistent_count = proxy_count;
         for (uint32_t iteration = 0; iteration < 10000; ++iteration) {
@@ -1328,7 +1451,7 @@ int objc_bridge32_run_proxy_self_test(void)
            [(NSEvent *)object_for_receiver((uint32_t)(uintptr_t)other) data1]!=456)return -1;
         reset_event_proxies();
         printf("Objective-C proxy self-test: PASS "
-               "(10000 CF ownership cycles; 100000 scoped dates; 100000 owned/autoreleased string cycles; mixed CF varargs; 10000 messages, +%zu bytes; stable CFData; 10000 events, persistent=%u, "
+               "(10000 CF ownership cycles; 100000 scoped dates; 100000 owned/autoreleased string cycles; mixed CF varargs; 10000 messages, +%zu bytes; stable CFData; guest NSData bytes; 10000 events, persistent=%u, "
                "event=%u)\n", invocation_growth, proxy_count,
                event_proxy_count);
         return 0;
@@ -12603,6 +12726,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
             return 1;
         }
         if (selector_name && fastfive_mouse_location(receiver, selector_name, result)) return 1;
+        if (receiver && selector_name && guest_data_message(receiver, selector_name, arguments, result)) return 1;
         /* Creating, attaching, making current or presenting a context may
            give the current context different texture bindings. */
         if (receiver == [NSOpenGLContext class] ||

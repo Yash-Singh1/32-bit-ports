@@ -5,6 +5,7 @@
 #include "carbon_bridge.h"
 #include "controller_bridge.h"
 #include "asphalt6_controller.h"
+#include "crypto_bridge.h"
 #include "game_profile.h"
 #include "macho_loader.h"
 #include "objc_bridge.h"
@@ -1000,6 +1001,10 @@ int main(int argc, char **argv)
     }
     if (getenv("LP32_GAMMA_SELFTEST")) {
         return objc_bridge32_run_gamma_self_test() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (getenv("LP32_RECEIPT_SELFTEST")) {
+        return crypto_bridge32_run_receipt_self_test(getenv("LP32_RECEIPT_SELFTEST")) == 0 ?
+            EXIT_SUCCESS : EXIT_FAILURE;
     }
     if (getenv("LP32_OBJC_PROXY_SELFTEST")) {
         return objc_bridge32_run_proxy_self_test() == 0 ?
