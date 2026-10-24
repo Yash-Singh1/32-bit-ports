@@ -10,7 +10,7 @@ without that change, plus `Contents/_MASReceipt/receipt`.
 
 ## Build and convert
 
-Download [Fast Five Converter 0.0.0-dev.1](https://github.com/Yash-Singh1/32-bit-ports/releases/tag/fastfive-converter-v0.0.0-dev.1),
+Download [Fast Five Converter 0.0.0-dev.2](https://github.com/Yash-Singh1/32-bit-ports/releases/tag/fastfive-converter-v0.0.0-dev.2),
 unzip it and open `FastFive-Converter.app`. The download includes the loader
 and GLMetal and does not require Xcode, Python or a source checkout. It
 contains no game data or Apple runtime libraries. This development build
