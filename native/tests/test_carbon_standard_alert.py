@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run real native standard alerts through the guest Carbon dispatcher.
+"""Run AppKit standard alerts through the guest Carbon dispatcher.
 
 The self-test sends native button commands; it never fakes a modal result.
 No game files or old Apple runtime libraries are needed.
@@ -42,7 +42,7 @@ exports:
                 LP32_MUTE_AUDIO='1'), capture_output=True, text=True, timeout=20)
         output = result.stdout + result.stderr
         assert result.returncode == 0 and 'Carbon standard alert PASS' in output, output
-        print('Carbon standard alert: PASS (native OK/Cancel/Other, 16-bit result, token retirement, dynamic import)')
+        print('Carbon standard alert: PASS (AppKit OK/Cancel/Other, 16-bit result, token retirement, dynamic import)')
 
 
 if __name__ == '__main__':

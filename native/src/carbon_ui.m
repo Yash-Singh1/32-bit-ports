@@ -58,6 +58,16 @@ static LP32CarbonPanel *fullscreen_panel;
 static BOOL carbon_focus_installed, carbon_app_active;
 static BOOL carbon_restoring_focus, carbon_menu_bar_hidden, carbon_presentation_saved;
 static NSApplicationPresentationOptions carbon_previous_presentation;
+@interface LP32CarbonStandardAlert : NSAlert {
+@public
+  NSMutableArray *carbon_items;
+}
+@end
+@implementation LP32CarbonStandardAlert
+- (void)dealloc { [carbon_items release]; [super dealloc]; }
+@end
+static NSMutableDictionary *standard_alerts;
+static unsigned standard_alert_depth;
 
 static void carbon_apply_fullscreen_presentation(void) {
   BOOL fullscreen = carbon_app_active && fullscreen_panel && fullscreen_panel->requested_visible &&
@@ -109,7 +119,7 @@ static void carbon_application_focus_changed(BOOL active) {
     if (!presenter)
       for (LP32CarbonPanel *panel in [panels allValues])
         if (panel->game_surface && panel->requested_visible) { presenter = panel; break; }
-    if (presenter && presenter->requested_visible) {
+    if (presenter && presenter->requested_visible && !standard_alert_depth && ![NSApp modalWindow]) {
       [presenter->window makeKeyAndOrderFront:nil];
       [presenter->window makeFirstResponder:[presenter->window contentView]];
       for (NSOpenGLContext *context in [gl_contexts allValues])
@@ -722,6 +732,64 @@ int32_t carbon_ui_run_modal(void *native) {
   p->timer = nil;
   p->modal = NO;
   [p release];
+  return 0;
+}
+/* RunStandardAlert's legacy Carbon loop can draw its dialog without delivering
+ * user input in an NSApplicationLoad process. AppKit owns this modal loop and
+ * its buttons. Keep the Carbon dialog for guest references until it completes. */
+void carbon_ui_prepare_standard_alert(void *dialog, uint32_t type,
+    const void *raw_title, const void *raw_message, int16_t default_item, int16_t cancel_item) {
+  LP32CarbonStandardAlert *alert = [[LP32CarbonStandardAlert alloc] init];
+  alert->carbon_items = [[NSMutableArray alloc] init];
+  [alert setMessageText:(NSString *)raw_title ?: @""];
+  [alert setInformativeText:(NSString *)raw_message ?: @""];
+  [alert setAlertStyle:type == kAlertStopAlert ? NSAlertStyleCritical :
+      type == kAlertCautionAlert ? NSAlertStyleWarning : NSAlertStyleInformational];
+  for (int16_t item = 1; item <= 3; ++item) {
+    void *control = NULL;
+    if (((OSStatus (*)(void *, int16_t, void **))api("GetDialogItemAsControl"))(
+        dialog, item, &control) || !control ||
+        !((Boolean (*)(void *))api("HIViewIsLatentlyVisible"))(control)) continue;
+    CFStringRef text = NULL;
+    ((OSStatus (*)(void *, CFStringRef *))api("CopyControlTitleAsCFString"))(control, &text);
+    NSButton *button = [alert addButtonWithTitle:(NSString *)text ?: @""];
+    /* NSAlert owns the button tags and uses them as its modal response. */
+    [alert->carbon_items addObject:@(item)];
+    [button setKeyEquivalent:item == default_item ? @"\r" : item == cancel_item ? @"\033" : @""];
+    if (text) CFRelease(text);
+  }
+  if (!standard_alerts) standard_alerts = [[NSMutableDictionary alloc] init];
+  [standard_alerts setObject:alert forKey:[NSValue valueWithPointer:dialog]];
+  [alert release];
+}
+int32_t carbon_ui_run_standard_alert(void *dialog, int16_t *item) {
+  NSValue *key = [NSValue valueWithPointer:dialog];
+  LP32CarbonStandardAlert *alert = [[standard_alerts objectForKey:key] retain];
+  if (!alert || ![alert.buttons count]) { [alert release]; return paramErr; }
+  ++standard_alert_depth;
+  fprintf(stderr, "compat32: entering AppKit standard alert buttons=%lu\n", (unsigned long)[alert.buttons count]);
+  NSModalResponse response = [alert runModal];
+  NSInteger index = response - NSAlertFirstButtonReturn;
+  int32_t status = index >= 0 && (NSUInteger)index < [alert.buttons count] ? noErr : userCanceledErr;
+  if (!status && item) *item = [alert->carbon_items[index] shortValue];
+  --standard_alert_depth;
+  [standard_alerts removeObjectForKey:key];
+  [alert release];
+  /* DisposeDialog has no LP64 export. Its dialog window owns the native
+     controls and can be destroyed through the surviving Window Manager. */
+  void *window = ((void *(*)(void *))api("GetDialogWindow"))(dialog);
+  ((void (*)(void *))api("DisposeWindow"))(window);
+  fprintf(stderr, "compat32: AppKit standard alert returned status=%d item=%d\n", status, !status && item ? *item : 0);
+  return status;
+}
+/* Used only by the explicitly enabled bridge self-test. */
+int carbon_ui_test_click_standard_alert(void *dialog, int16_t item) {
+  LP32CarbonStandardAlert *alert = [standard_alerts objectForKey:[NSValue valueWithPointer:dialog]];
+  if (![NSApp modalWindow] || [NSApp modalWindow] != alert.window) return 0;
+  for (NSUInteger index = 0; index < [alert.buttons count]; ++index)
+    if ([alert->carbon_items[index] shortValue] == item) {
+      [alert.buttons[index] performClick:nil]; return 1;
+    }
   return 0;
 }
 int carbon_ui_stop_modal(void *native) {

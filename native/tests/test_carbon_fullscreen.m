@@ -9,6 +9,13 @@ void *carbon_text_copy_value(void *view) { (void)view; return NULL; }
 void carbon_text_set_value(void *view, void *value) { (void)view; (void)value; }
 void objc_bridge32_note_agl_frame(void) {}
 void audio_bridge32_note_frame_presented(void) {}
+void objc_bridge32_install_test_input(void *window) { (void)window; }
+int hitch_recorder_enabled;
+uint64_t hitch_now(void) { return 0; }
+void hitch_frame(uint64_t swap, uint64_t work, uint64_t flush, uint64_t present,
+                 uint64_t target, bool active) {
+  (void)swap; (void)work; (void)flush; (void)present; (void)target; (void)active;
+}
 static int input_active;
 void objc_bridge32_carbon_focus_changed(int active) { input_active = active; }
 
@@ -101,6 +108,29 @@ int main(void) {
            out while the legacy Carbon event window remained alive. */
         [surface->window orderOut:nil];
         unsetenv("LP32_BACKGROUND_TEST");
+        if (!edition && !iteration) {
+          AlertStdCFStringAlertParamRec params = {0};
+          assert(!((OSStatus (*)(void *, uint32_t))api("GetStandardAlertDefaultParams"))(&params, 1));
+          void *alert = NULL;
+          assert(!((OSStatus (*)(uint16_t, CFStringRef, CFStringRef, void *, void **))api("CreateStandardAlert"))(
+              1, CFSTR("Modal focus test"), CFSTR("Automated regression"), &params, &alert));
+          carbon_ui_prepare_standard_alert(alert, 1, CFSTR("Modal focus test"), CFSTR("Automated regression"), 1, 2);
+          __block BOOL tested = NO;
+          CFRunLoopTimerRef timer = CFRunLoopTimerCreateWithHandler(NULL,
+              CFAbsoluteTimeGetCurrent() + .05, 0, 0, 0, ^(CFRunLoopTimerRef timer) {
+            CFRunLoopTimerInvalidate(timer);
+            [[NSNotificationCenter defaultCenter] postNotificationName:NSApplicationDidBecomeActiveNotification object:NSApp];
+            assert([NSApp modalWindow] && [NSApp modalWindow] != surface->window);
+            assert(![surface->window isVisible]); /* Activation must not raise the game over the alert. */
+            tested = YES;
+            assert(carbon_ui_test_click_standard_alert(alert, 1));
+          });
+          CFRunLoopAddTimer(CFRunLoopGetCurrent(), timer, (CFStringRef)NSModalPanelRunLoopMode);
+          int16_t item = 0;
+          assert(!carbon_ui_run_standard_alert(alert, &item) && tested && item == 1);
+          CFRelease(timer);
+          assert(![NSApp modalWindow]);
+        }
         carbon_application_focus_changed(YES);
         assert([surface->window isVisible] && ![backing->window isVisible]);
         assert(!lp32_suppress_background_input());
@@ -144,5 +174,5 @@ int main(void) {
     test_appkit_event_delivery();
     [NSApp setPresentationOptions:original];
   }
-  puts("Carbon fullscreen PASS (AppKit activation delivery, reentrant pump, Carbon input preserved, SP/MP presenter and menu-bar restoration, background isolation, fullscreen exit, hide, disposal)");
+  puts("Carbon fullscreen PASS (modal alert focus, AppKit activation delivery, reentrant pump, Carbon input preserved, SP/MP presenter and menu-bar restoration, background isolation, fullscreen exit, hide, disposal)");
 }

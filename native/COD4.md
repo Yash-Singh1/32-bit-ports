@@ -73,12 +73,18 @@ It validates the image hash before using diagnostic addresses and stops before
 starting a network request. The repository and converter contain no game files.
 
 The Steam hardware-change prompt, "Set Optimal Settings?", uses
-`RunStandardAlert` with no modal filter. The bridge now runs that native alert,
-returns the chosen 16-bit button index, and retires the disposed dialog token.
-`make -C native test-carbon-standard-alert` checks real native OK, Cancel and
-Other clicks, result-buffer boundaries, token retirement and dynamic lookup.
-This addresses a dev.5 report that trapped at `_RunStandardAlert` on macOS 27;
-the native-dialog regression runs locally on macOS 26.5.2.
+`RunStandardAlert` with no modal filter. Dev.6 implemented the missing import,
+but its native Carbon modal loop could display the alert without accepting
+user input. The bridge now presents its text, button labels, and default/cancel
+choices through AppKit's modal loop. It returns the chosen 16-bit Carbon item
+index and retires the disposed dialog token. Activation cannot raise a game
+presenter over an AppKit modal window.
+`make -C native test-carbon-standard-alert` checks AppKit OK, Cancel and Other
+actions, result-buffer boundaries, token retirement and dynamic lookup.
+`make -C native test-carbon-fullscreen` also checks modal focus during
+activation. Local interaction checks on macOS 26.5.2 cover mouse selection,
+Return and Escape with a placeholder splash window. macOS 27 still needs
+confirmation with the game itself.
 
 ## Validation status
 

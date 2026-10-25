@@ -26,6 +26,10 @@ int carbon_ui_is_visible(void *window);
 int carbon_ui_is_active(void *window);
 int carbon_ui_convert_game_point(void *window, int16_t *point, int to_local);
 void carbon_ui_use_native(void *window);
+void carbon_ui_prepare_standard_alert(void *dialog, uint32_t type,
+    const void *title, const void *message, int16_t default_item, int16_t cancel_item);
+int32_t carbon_ui_run_standard_alert(void *dialog, int16_t *item);
+int carbon_ui_test_click_standard_alert(void *dialog, int16_t item);
 int32_t carbon_ui_show_sheet(void *sheet, void *parent);
 int32_t carbon_ui_hide_sheet(void *sheet);
 #endif

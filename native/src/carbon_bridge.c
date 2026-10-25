@@ -1988,6 +1988,10 @@ int carbon_bridge32_dispatch(const char *name, const uint32_t *a,
     unsigned index = IS("_CreateStandardSheet") ? 5 : 4;
     if (a[index])
       *(uint32_t *)P(index) = wrap(dialog);
+    if (!*out && dialog && IS("_CreateStandardAlert"))
+      carbon_ui_prepare_standard_alert(dialog, a[0], title_string, message_string,
+          pointer ? params.defaultButton : kAlertStdAlertOKButton,
+          pointer ? params.cancelButton : kAlertStdAlertCancelButton);
     return 1;
   }
   if (IS("_RunStandardAlert")) {
@@ -1997,11 +2001,11 @@ int carbon_bridge32_dispatch(const char *name, const uint32_t *a,
     struct carbon_ref *alert = reference(a[0]);
     if (!alert || !alert->host) { *out = (uint32_t)paramErr; return 1; }
     int16_t item = 0;
-    int32_t status = F(int32_t, void *, void *, int16_t *)(alert->host, NULL, &item);
+    int32_t status = carbon_ui_run_standard_alert(alert->host, &item);
     if (a[2]) *(int16_t *)P(2) = item;
     /* RunStandardAlert disposes its dialog. Do not leave its old host
        pointer available through a guest token after successful completion. */
-    if (!status) {
+    if (!status || status == userCanceledErr) {
       struct carbon_ref **link = &references;
       while (*link && *link != alert) link = &(*link)->next;
       if (*link) { *link = alert->next; free(alert); }
@@ -3537,20 +3541,13 @@ done:
   return passed;
 }
 
-/* Exercise the native modal loop with timed clicks on real Carbon buttons. */
+/* Exercise the AppKit modal loop with timed actions on its real buttons. */
 struct alert_test_click { void *dialog; int16_t item; bool sent; };
 static void click_test_alert(CFRunLoopTimerRef timer, void *context) {
   struct alert_test_click *click = context;
-  void *control = NULL;
-  int32_t status = ((int32_t (*)(void *, int16_t, void **))symbol("_GetDialogItemAsControl"))(
-      click->dialog, click->item, &control);
-  if (status || !control) _Exit(91);
   click->sent = true;
   CFRunLoopTimerInvalidate(timer);
-  int16_t part = 0;
-  status = ((int32_t (*)(void *, int16_t, uint32_t, int16_t *))symbol("_HIViewSimulateClick"))(
-      control, kControlButtonPart, 0, &part);
-  if (status) _Exit(92);
+  if (!carbon_ui_test_click_standard_alert(click->dialog, click->item)) _Exit(92);
 }
 int carbon_bridge32_run_alert_self_test(void) {
   uint32_t memory = compat_runtime32_allocate(64, 1);
