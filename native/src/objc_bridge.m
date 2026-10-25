@@ -8804,6 +8804,14 @@ static int objc_bridge32_dispatch_body(const char *import_name,
     if (LP32_NAME_IS(import_name, import_length, "_CFStringConvertIANACharSetNameToEncoding")) {
         *result = CFStringConvertIANACharSetNameToEncoding((CFStringRef)object_for_argument(arguments[0]));return 1;
     }
+    if (LP32_NAME_IS(import_name, import_length, "_CFStringConvertEncodingToIANACharSetName")) {
+        *result = proxy_for_object((id)CFStringConvertEncodingToIANACharSetName(arguments[0]));
+        return 1;
+    }
+    if (LP32_NAME_IS(import_name, import_length, "_NSTemporaryDirectory")) {
+        *result = proxy_for_object(NSTemporaryDirectory());
+        return 1;
+    }
     if (LP32_NAME_IS(import_name, import_length, "_CFStringCreateArrayBySeparatingStrings")) {
         CFArrayRef array=CFStringCreateArrayBySeparatingStrings(NULL,(CFStringRef)object_for_argument(arguments[1]),(CFStringRef)object_for_argument(arguments[2]));
         *result=proxy_for_object((id)array);if(array)CFRelease(array);return 1;
@@ -8995,8 +9003,10 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         *result = arguments[0] == preferred_game_display_id();
         return 1;
     }
-    if (LP32_NAME_IS(import_name, import_length, "_CGDisplayPixelsHigh")) {
-        *result = [[legacy_current_mode_for_display(arguments[0]) objectForKey:@"Height"] unsignedIntValue];
+    if (LP32_NAME_IS(import_name, import_length, "_CGDisplayPixelsHigh") ||
+        LP32_NAME_IS(import_name, import_length, "_CGDisplayPixelsWide")) {
+        NSString *dimension = LP32_NAME_IS(import_name, import_length, "_CGDisplayPixelsWide") ? @"Width" : @"Height";
+        *result = [[legacy_current_mode_for_display(arguments[0]) objectForKey:dimension] unsignedIntValue];
         return 1;
     }
     if (LP32_NAME_IS(import_name, import_length, "_CGDataProviderCreateWithURL")) {

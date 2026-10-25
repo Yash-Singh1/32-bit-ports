@@ -117,6 +117,11 @@ capture, so its cause has not been established.
 
 ## Converter app
 
+The [dev.6 import audit](COD4-IMPORT-AUDIT.md) records additional network,
+launcher and display bridges and the remaining unsupported calls found in
+the supplied issue #13 and Steam executables. Import-name coverage alone
+does not establish complete compatibility.
+
 The COD4, MW2, and MW3 converters package GLMetal and its native shader
 compiler. The [COD2 converter](COD2.md#converter-app) uses Apple OpenGL.
 Build all four standalone apps with `make -C native cod-converters`, or use

@@ -63,12 +63,63 @@ static uint32_t copied(CFTypeRef value) {
     CFRelease(value);
   return token;
 }
+/* CFIndex is 32 bits in the guest and 64 bits in the host CFStreamError. */
+static void stream_error32(uint32_t address, CFStreamError error) {
+  if (address) {
+    int32_t fields[] = {(int32_t)error.domain, error.error};
+    memcpy((void *)(uintptr_t)address, fields, sizeof(fields));
+  }
+}
+struct source_context32 {
+  struct callback32 common;
+  uint32_t equal, hash, schedule, cancel;
+};
+static const void *source_retain(const void *raw) {
+  struct source_context32 *copy = malloc(sizeof(*copy));
+  if (!copy) return NULL;
+  *copy = *(const struct source_context32 *)raw;
+  if (copy->common.retain)
+    copy->common.info = compat_runtime32_call(copy->common.retain, &copy->common.info, 1);
+  return copy;
+}
+static Boolean source_equal(const void *left, const void *right) {
+  const struct source_context32 *a = left, *b = right;
+  if (a->equal != b->equal || a->hash != b->hash ||
+      a->common.callback != b->common.callback) return false;
+  if (!a->equal) return a->common.info == b->common.info;
+  uint32_t args[] = {a->common.info, b->common.info};
+  return compat_runtime32_call(a->equal, args, 2) != 0;
+}
+static CFHashCode source_hash(const void *raw) {
+  const struct source_context32 *c = raw;
+  return c->hash ? compat_runtime32_call(c->hash, &c->common.info, 1) : c->common.info;
+}
+static void source_schedule_callback(void *raw, CFRunLoopRef loop,
+                                     CFStringRef mode, bool cancel) {
+  const struct source_context32 *c = raw;
+  uint32_t args[] = {c->common.info, objc_bridge32_guest_object(loop),
+                     objc_bridge32_guest_object((void *)mode)};
+  compat_runtime32_call(cancel ? c->cancel : c->schedule, args, 3);
+}
+static void source_schedule(void *raw, CFRunLoopRef loop, CFStringRef mode) {
+  source_schedule_callback(raw, loop, mode, false);
+}
+static void source_cancel(void *raw, CFRunLoopRef loop, CFStringRef mode) {
+  source_schedule_callback(raw, loop, mode, true);
+}
+static void source_perform(void *raw) {
+  const struct source_context32 *c = raw;
+  compat_runtime32_call(c->common.callback, &c->common.info, 1);
+}
 int cfnetwork_bridge32_dispatch(const char *name, const uint32_t *a,
                                 uint64_t *out) {
 #define IS(s) (!strcmp(name, s))
 #define O(i) objc_bridge32_host_object(a[i])
 #define P(i) ((void *)(uintptr_t)a[i])
-  if (IS("_CFHTTPMessageCreateRequest")) {
+  if (IS("_CFMakeCollectable")) {
+    /* The compatibility runtime uses retain/release, never ObjC GC. */
+    *out = a[0];
+  } else if (IS("_CFHTTPMessageCreateRequest")) {
     if (getenv("LP32_TRACE_NETWORK")) {
       char host[256] = {0};
       CFStringRef name = CFURLCopyHostName(O(2));
@@ -97,6 +148,31 @@ int cfnetwork_bridge32_dispatch(const char *name, const uint32_t *a,
     *out = copied(CFHTTPMessageCopyBody(O(0)));
   else if (IS("_CFHTTPMessageCopyHeaderFieldValue"))
     *out = copied(CFHTTPMessageCopyHeaderFieldValue(O(0), O(1)));
+  else if (IS("_CFHTTPMessageCopyResponseStatusLine"))
+    *out = copied(CFHTTPMessageCopyResponseStatusLine(O(0)));
+  else if (IS("_CFHTTPMessageCopyVersion"))
+    *out = copied(CFHTTPMessageCopyVersion(O(0)));
+  else if (IS("_CFHTTPMessageIsHeaderComplete"))
+    *out = CFHTTPMessageIsHeaderComplete(O(0));
+  else if (IS("_CFHTTPAuthenticationCreateFromResponse"))
+    *out = copied(CFHTTPAuthenticationCreateFromResponse(NULL, O(1)));
+  else if (IS("_CFHTTPAuthenticationCopyMethod"))
+    *out = copied(CFHTTPAuthenticationCopyMethod(O(0)));
+  else if (IS("_CFHTTPAuthenticationCopyRealm"))
+    *out = copied(CFHTTPAuthenticationCopyRealm(O(0)));
+  else if (IS("_CFHTTPAuthenticationRequiresAccountDomain"))
+    *out = CFHTTPAuthenticationRequiresAccountDomain(O(0));
+  else if (IS("_CFHTTPAuthenticationRequiresUserNameAndPassword"))
+    *out = CFHTTPAuthenticationRequiresUserNameAndPassword(O(0));
+  else if (IS("_CFHTTPAuthenticationIsValid")) {
+    CFStreamError error = {0};
+    *out = CFHTTPAuthenticationIsValid(O(0), &error);
+    stream_error32(a[1], error);
+  } else if (IS("_CFHTTPMessageApplyCredentialDictionary")) {
+    CFStreamError error = {0};
+    *out = CFHTTPMessageApplyCredentialDictionary(O(0), O(1), O(2), &error);
+    stream_error32(a[3], error);
+  }
   else if (IS("_CFHTTPMessageGetResponseStatusCode")) {
     *out = (uint32_t)CFHTTPMessageGetResponseStatusCode(O(0));
     if (getenv("LP32_TRACE_NETWORK"))
@@ -124,6 +200,12 @@ int cfnetwork_bridge32_dispatch(const char *name, const uint32_t *a,
     if (a[4]) *(uint32_t *)P(4) = token;
   } else if (IS("_CFReadStreamCreateForHTTPRequest"))
     *out = copied(CFReadStreamCreateForHTTPRequest(NULL, O(1)));
+  else if (IS("_CFReadStreamCreateForStreamedHTTPRequest"))
+    *out = copied(CFReadStreamCreateForStreamedHTTPRequest(NULL, O(1), O(2)));
+  else if (IS("_CFReadStreamHasBytesAvailable"))
+    *out = CFReadStreamHasBytesAvailable(O(0));
+  else if (IS("_CFReadStreamCopyError"))
+    *out = copied(CFReadStreamCopyError(O(0)));
   else if (IS("_CFReadStreamOpen"))
     *out = CFReadStreamOpen(O(0));
   else if (IS("_CFReadStreamClose")) {
@@ -161,6 +243,12 @@ int cfnetwork_bridge32_dispatch(const char *name, const uint32_t *a,
     *out = copied(CFNetworkCopySystemProxySettings());
   else if (IS("_CFNetworkCopyProxiesForURL"))
     *out = copied(CFNetworkCopyProxiesForURL(O(0), O(1)));
+  else if (IS("_CFNetworkCopyProxiesForAutoConfigurationScript")) {
+    CFErrorRef error = NULL;
+    *out = copied(CFNetworkCopyProxiesForAutoConfigurationScript(O(0), O(1), &error));
+    if (a[2]) *(uint32_t *)P(2) = copied(error);
+    else if (error) CFRelease(error);
+  }
   else if (IS("_CFRunLoopGetMain"))
     *out = objc_bridge32_guest_object(CFRunLoopGetMain());
   else if (IS("_CFRunLoopGetCurrent"))
@@ -184,7 +272,18 @@ int cfnetwork_bridge32_dispatch(const char *name, const uint32_t *a,
     *out = 0;
   } else if (IS("_CFRunLoopContainsSource"))
     *out = O(0) && O(1) && CFRunLoopContainsSource(O(0), O(1), O(2));
-  else if (IS("_CFRunLoopSourceInvalidate")) {
+  else if (IS("_CFRunLoopSourceCreate")) {
+    const uint32_t *g = P(2);
+    /* Version one contains a Mach port callback and has a different ABI. */
+    if (!g || g[0]) { *out = 0; return 1; }
+    struct source_context32 c = {{g[1], g[2], g[3], g[4], g[9]},
+                                 g[5], g[6], g[7], g[8]};
+    CFRunLoopSourceContext context = {0, &c, source_retain, release_context,
+        g[4] ? describe_context : NULL, source_equal,
+        source_hash, g[7] ? source_schedule : NULL,
+        g[8] ? source_cancel : NULL, g[9] ? source_perform : NULL};
+    *out = copied(CFRunLoopSourceCreate(NULL, (int32_t)a[1], &context));
+  } else if (IS("_CFRunLoopSourceInvalidate")) {
     CFRunLoopSourceInvalidate(O(0));
     *out = 0;
   } else if (IS("_CFRunLoopSourceSignal")) {

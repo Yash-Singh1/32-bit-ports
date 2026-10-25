@@ -1782,6 +1782,31 @@ int carbon_bridge32_dispatch(const char *name, const uint32_t *a,
     return 1;
   }
   const char *native_name = name;
+  if (IS("_GetControlByID")) {
+    if (!a[1] || !a[2]) { *out = (uint32_t)paramErr; return 1; }
+    ControlID identifier;
+    memcpy(&identifier, P(1), sizeof(identifier));
+    void *view = NULL;
+    void *root = ((void *(*)(void *))symbol("_HIViewGetRoot"))(unwrap(a[0]));
+    int32_t status = ((int32_t (*)(void *, ControlID, void **))symbol("_HIViewFindByID"))(
+        root, identifier, &view);
+    *(uint32_t *)P(2) = wrap(view);
+    *out = (uint32_t)status;
+    return 1;
+  }
+  if (IS("_GetControlReference") || IS("_SetControlReference")) {
+    struct carbon_ref *control = reference(a[0]);
+    if (!control) { *out = 0; return 1; }
+    if (IS("_SetControlReference")) control->guest_refcon = (int32_t)a[1];
+    *out = IS("_GetControlReference") ? (uint32_t)control->guest_refcon : 0;
+    return 1;
+  }
+  if (IS("_ShowControl") || IS("_HideControl")) {
+    ((int32_t (*)(void *, bool))symbol("_HIViewSetVisible"))(
+        unwrap(a[0]), IS("_ShowControl"));
+    *out = 0;
+    return 1;
+  }
   if (IS("_CountSubControls")) {
     uint32_t count = 0;
     void *view =
@@ -1797,17 +1822,17 @@ int carbon_bridge32_dispatch(const char *name, const uint32_t *a,
   }
   if (IS("_IsControlEnabled"))
     native_name = "_HIViewIsEnabled";
-  if (IS("_GetControl32BitValue"))
+  if (IS("_GetControl32BitValue") || IS("_GetControlValue"))
     native_name = "_HIViewGetValue";
   if (IS("_GetControl32BitMinimum"))
     native_name = "_HIViewGetMinimum";
-  if (IS("_GetControl32BitMaximum"))
+  if (IS("_GetControl32BitMaximum") || IS("_GetControlMaximum"))
     native_name = "_HIViewGetMaximum";
-  if (IS("_SetControl32BitValue"))
+  if (IS("_SetControl32BitValue") || IS("_SetControlValue"))
     native_name = "_HIViewSetValue";
   if (IS("_SetControl32BitMinimum"))
     native_name = "_HIViewSetMinimum";
-  if (IS("_SetControl32BitMaximum"))
+  if (IS("_SetControl32BitMaximum") || IS("_SetControlMaximum"))
     native_name = "_HIViewSetMaximum";
   if (IS("_SetControlCommandID"))
     native_name = "_HIViewSetCommandID";
@@ -2203,11 +2228,26 @@ int carbon_bridge32_dispatch(const char *name, const uint32_t *a,
     return 1;
   }
   if (IS("_GetControlEventTarget") || IS("_GetControlOwner") ||
-      IS("_HIObjectGetEventTarget") || IS("_HIViewGetSuperview") ||
+      IS("_GetMenuEventTarget") || IS("_HIObjectGetEventTarget") || IS("_HIViewGetSuperview") ||
       IS("_HIViewGetWindow")) {
     *out = wrap(F(void *, void *)(unwrap(a[0])));
     if (getenv("LP32_TRACE_CARBON"))
       fprintf(stderr, "compat32: Carbon %s -> %#x\n", name, (uint32_t)*out);
+    return 1;
+  }
+  if (IS("_HIViewGetViewForMouseEvent")) {
+    void *view = NULL;
+    *out = (uint32_t)F(int32_t, void *, void *, void **)(unwrap(a[0]), unwrap(a[1]), &view);
+    if (a[2]) *(uint32_t *)P(2) = wrap(view);
+    return 1;
+  }
+  if (IS("_SetThemeCursor")) {
+    *out = (uint32_t)F(int32_t, uint32_t)(a[0]);
+    return 1;
+  }
+  if (IS("_EnableMenuItem")) {
+    F(void, void *, uint16_t)(unwrap(a[0]), (uint16_t)a[1]);
+    *out = 0;
     return 1;
   }
   if (IS("_GetControlBounds")) {
@@ -2239,6 +2279,15 @@ int carbon_bridge32_dispatch(const char *name, const uint32_t *a,
   if (IS("_GetControl32BitValue") || IS("_GetControl32BitMinimum") ||
       IS("_GetControl32BitMaximum")) {
     *out = (uint32_t)F(int32_t, void *)(unwrap(a[0]));
+    return 1;
+  }
+  if (IS("_GetControlValue") || IS("_GetControlMaximum")) {
+    *out = (uint32_t)(int32_t)(int16_t)F(int32_t, void *)(unwrap(a[0]));
+    return 1;
+  }
+  if (IS("_SetControlValue") || IS("_SetControlMaximum")) {
+    F(int32_t, void *, int32_t)(unwrap(a[0]), (int16_t)a[1]);
+    *out = 0;
     return 1;
   }
   if (IS("_SetControl32BitValue") || IS("_SetControl32BitMinimum") ||
@@ -3583,6 +3632,42 @@ int carbon_bridge32_run_geometry_self_test(void) {
     args[3] = memory + 68;
     if (!carbon_bridge32_dispatch("_CreateUserPaneControl", args, &out) || out)
       goto dispose;
+    /* MacBuilder locates nib controls by ID, then changes their value and
+       visibility. Keep both pointer outputs and the old signed-short ABI. */
+    ControlID identifier = {'lp32', 23};
+    if (((int32_t (*)(void *, ControlID))symbol("_HIViewSetID"))(
+        unwrap(handles[1]), identifier)) goto dispose;
+    memcpy((void *)(uintptr_t)(memory + 32), &identifier, sizeof(identifier));
+    *(uint32_t *)(uintptr_t)(memory + 44) = 0x1234abcd;
+    args[0] = handles[0]; args[1] = memory + 32; args[2] = memory + 40;
+    if (!carbon_bridge32_dispatch("_GetControlByID", args, &out) || out ||
+        *(uint32_t *)(uintptr_t)(memory + 40) != handles[1] ||
+        *(uint32_t *)(uintptr_t)(memory + 44) != 0x1234abcd) goto dispose;
+    args[0] = handles[1]; args[1] = 32000;
+    if (!carbon_bridge32_dispatch("_SetControlMaximum", args, &out)) goto dispose;
+    if (!carbon_bridge32_dispatch("_GetControlMaximum", args, &out) || out != 32000) goto dispose;
+    ((int32_t (*)(void *, int32_t))symbol("_HIViewSetMinimum"))(unwrap(handles[1]), -32000);
+    args[1] = 0x1234ff85; /* the 16-bit argument is -123 */
+    if (!carbon_bridge32_dispatch("_SetControlValue", args, &out)) goto dispose;
+    if (!carbon_bridge32_dispatch("_GetControlValue", args, &out) || (int32_t)out != -123) goto dispose;
+    args[1] = 0xdeadbeef;
+    if (!carbon_bridge32_dispatch("_SetControlReference", args, &out)) goto dispose;
+    if (!carbon_bridge32_dispatch("_GetControlReference", args, &out) || out != 0xdeadbeef) goto dispose;
+    if (!carbon_bridge32_dispatch("_HideControl", args, &out)) goto dispose;
+    if (((bool (*)(void *))symbol("_HIViewIsLatentlyVisible"))(unwrap(handles[1]))) goto dispose;
+    if (!carbon_bridge32_dispatch("_ShowControl", args, &out)) goto dispose;
+    if (!((bool (*)(void *))symbol("_HIViewIsLatentlyVisible"))(unwrap(handles[1]))) goto dispose;
+    uint32_t objc_args[] = {0};
+    if (!objc_bridge32_dispatch("_CGMainDisplayID", objc_args, &out)) goto dispose;
+    objc_args[0] = (uint32_t)out;
+    if (!objc_bridge32_dispatch("_CGDisplayPixelsWide", objc_args, &out) || !out) goto dispose;
+    if (!objc_bridge32_dispatch("_CGDisplayPixelsHigh", objc_args, &out) || !out) goto dispose;
+    objc_args[0] = kCFStringEncodingUTF8;
+    if (!objc_bridge32_dispatch("_CFStringConvertEncodingToIANACharSetName", objc_args, &out) || !out ||
+        CFStringCompare(objc_bridge32_host_object((uint32_t)out), CFSTR("utf-8"), kCFCompareCaseInsensitive)) goto dispose;
+    if (!objc_bridge32_dispatch("_NSTemporaryDirectory", objc_args, &out) || !out ||
+        !CFStringGetLength(objc_bridge32_host_object((uint32_t)out))) goto dispose;
+    args[0] = handles[0]; args[1] = memory; args[2] = 0;
     *rect = (Rect){0, 0, 20, 40};
     args[3] = memory + 72;
     if (!carbon_bridge32_dispatch("_CreateUserPaneControl", args, &out) || out)
@@ -3666,7 +3751,7 @@ done:
   fprintf(stderr,
           "Carbon geometry %s (legacy port coordinates, composited parent "
           "coordinates, nested controls, local window bounds, alert ABI, "
-          "command events)\n",
+          "command events, control IDs/values/visibility/refcons, display dimensions, encoding, temp directory)\n",
           result ? "FAIL" : "PASS");
   return result;
 }

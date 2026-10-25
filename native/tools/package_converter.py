@@ -10,7 +10,7 @@ from package_glmetal import install, run, DEFAULT_BUILD
 
 
 # Each standalone converter has its own development release sequence.
-BUILD_VERSIONS = {'cod2': '1', 'cod4': '5', 'mw2': '1', 'mw3': '1'}
+BUILD_VERSIONS = {'cod2': '1', 'cod4': '6', 'mw2': '1', 'mw3': '1'}
 
 
 def package(game, build, glmetal):
