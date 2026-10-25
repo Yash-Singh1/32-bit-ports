@@ -116,11 +116,13 @@ int main(void) {
               1, CFSTR("Modal focus test"), CFSTR("Automated regression"), &params, &alert));
           carbon_ui_prepare_standard_alert(alert, 1, CFSTR("Modal focus test"), CFSTR("Automated regression"), 1, 2);
           __block BOOL tested = NO;
+          __block NSWindow *alert_window = nil;
           CFRunLoopTimerRef timer = CFRunLoopTimerCreateWithHandler(NULL,
               CFAbsoluteTimeGetCurrent() + .05, 0, 0, 0, ^(CFRunLoopTimerRef timer) {
             CFRunLoopTimerInvalidate(timer);
             [[NSNotificationCenter defaultCenter] postNotificationName:NSApplicationDidBecomeActiveNotification object:NSApp];
             assert([NSApp modalWindow] && [NSApp modalWindow] != surface->window);
+            alert_window = [[NSApp modalWindow] retain];
             assert(![surface->window isVisible]); /* Activation must not raise the game over the alert. */
             tested = YES;
             assert(carbon_ui_test_click_standard_alert(alert, 1));
@@ -130,6 +132,8 @@ int main(void) {
           assert(!carbon_ui_run_standard_alert(alert, &item) && tested && item == 1);
           CFRelease(timer);
           assert(![NSApp modalWindow]);
+          assert(alert_window && ![alert_window isVisible]);
+          [alert_window release];
         }
         carbon_application_focus_changed(YES);
         assert([surface->window isVisible] && ![backing->window isVisible]);
@@ -174,5 +178,5 @@ int main(void) {
     test_appkit_event_delivery();
     [NSApp setPresentationOptions:original];
   }
-  puts("Carbon fullscreen PASS (modal alert focus, AppKit activation delivery, reentrant pump, Carbon input preserved, SP/MP presenter and menu-bar restoration, background isolation, fullscreen exit, hide, disposal)");
+  puts("Carbon fullscreen PASS (modal alert focus and immediate dismissal, AppKit activation delivery, reentrant pump, Carbon input preserved, SP/MP presenter and menu-bar restoration, background isolation, fullscreen exit, hide, disposal)");
 }

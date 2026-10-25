@@ -84,7 +84,14 @@ actions, result-buffer boundaries, token retirement and dynamic lookup.
 `make -C native test-carbon-fullscreen` also checks modal focus during
 activation. Local interaction checks on macOS 26.5.2 cover mouse selection,
 Return and Escape with a placeholder splash window. macOS 27 still needs
-confirmation with the game itself.
+local testing. The modal-input test converter is reported to reach the Steam
+campaign menu on an M5 running macOS 27.0.1 in
+[issue #13](https://github.com/Yash-Singh1/32-bit-ports/issues/13#issuecomment-6395678042).
+Its supplied log shows a successful
+alert result, rendering, and a normal guest exit with no trapped imports.
+This confirms that startup path, not complete mission or multiplayer coverage.
+The alert is explicitly hidden before returning to game initialization so
+dismissal does not wait for the next AppKit event cycle.
 
 ## Validation status
 

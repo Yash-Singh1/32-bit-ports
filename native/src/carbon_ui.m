@@ -758,6 +758,10 @@ void carbon_ui_prepare_standard_alert(void *dialog, uint32_t type,
     [button setKeyEquivalent:item == default_item ? @"\r" : item == cancel_item ? @"\033" : @""];
     if (text) CFRelease(text);
   }
+  /* AppKit presents the alert. Never leave its Carbon backing window on
+     screen while the guest is busy loading after a button is selected. */
+  void *window = ((void *(*)(void *))api("GetDialogWindow"))(dialog);
+  ((void (*)(void *))api("HideWindow"))(window);
   if (!standard_alerts) standard_alerts = [[NSMutableDictionary alloc] init];
   [standard_alerts setObject:alert forKey:[NSValue valueWithPointer:dialog]];
   [alert release];
@@ -769,6 +773,9 @@ int32_t carbon_ui_run_standard_alert(void *dialog, int16_t *item) {
   ++standard_alert_depth;
   fprintf(stderr, "compat32: entering AppKit standard alert buttons=%lu\n", (unsigned long)[alert.buttons count]);
   NSModalResponse response = [alert runModal];
+  /* Guest initialization may not pump AppKit for several seconds. Dismiss
+     the window now instead of relying on a later autorelease/event cycle. */
+  [alert.window orderOut:nil];
   NSInteger index = response - NSAlertFirstButtonReturn;
   int32_t status = index >= 0 && (NSUInteger)index < [alert.buttons count] ? noErr : userCanceledErr;
   if (!status && item) *item = [alert->carbon_items[index] shortValue];
@@ -779,6 +786,7 @@ int32_t carbon_ui_run_standard_alert(void *dialog, int16_t *item) {
      controls and can be destroyed through the surviving Window Manager. */
   void *window = ((void *(*)(void *))api("GetDialogWindow"))(dialog);
   ((void (*)(void *))api("DisposeWindow"))(window);
+  [NSApp updateWindows];
   fprintf(stderr, "compat32: AppKit standard alert returned status=%d item=%d\n", status, !status && item ? *item : 0);
   return status;
 }
