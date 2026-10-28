@@ -118,6 +118,9 @@ def build(source, loader, bundle, runtime, glmetal=None):
                 environment['LP32_GL_BACKEND'] = 'apple'
                 info['LSEnvironment'] = environment
                 info['LP32GLMetal'] = False
+            environment = dict(info.get('LSEnvironment', {}))
+            environment.update(LP32_ASPHALT6_SCENE_SCALE='3', LP32_ASPHALT6_MSAA='8')
+            info['LSEnvironment'] = environment
             (contents / 'Info.plist').write_bytes(plistlib.dumps(info))
             run('xattr', '-cr', staged)
             run('codesign', '--force', '--sign', '-', staged)

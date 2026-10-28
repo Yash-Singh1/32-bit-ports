@@ -4,11 +4,12 @@ import AppKit
 if CommandLine.arguments.dropFirst().first == "--convert" {
     let args = CommandLine.arguments
     guard args.count >= 4 else {
-        fputs("Usage: Asphalt6Converter --convert SOURCE_APP_FOLDER_ZIP_OR_DMG OUTPUT_FOLDER [--metal | --apple-gl] [--cache CACHE_FOLDER]\n", stderr)
+        fputs("Usage: Asphalt6Converter --convert SOURCE_APP_FOLDER_ZIP_OR_DMG OUTPUT_FOLDER [--ipad-assets IPAD_IPA] [--metal | --apple-gl] [--cache CACHE_FOLDER]\n", stderr)
         exit(2)
     }
     var cache = Converter.defaultCache
     var metal = false
+    var ipadIPA: URL?
     var index = 4
     while index < args.count {
         switch args[index] {
@@ -21,6 +22,10 @@ if CommandLine.arguments.dropFirst().first == "--convert" {
         case "--cache":
             guard index + 1 < args.count else { fputs("Missing option value.\n", stderr); exit(2) }
             cache = URL(fileURLWithPath: args[index + 1])
+            index += 2
+        case "--ipad-assets":
+            guard index + 1 < args.count else { fputs("Missing IPA path.\n", stderr); exit(2) }
+            ipadIPA = URL(fileURLWithPath: args[index + 1])
             index += 2
         default:
             fputs("Unknown option: \(args[index])\n", stderr)
@@ -40,7 +45,7 @@ if CommandLine.arguments.dropFirst().first == "--convert" {
     }
     do {
         let output = try converter.convertAsphalt6(source: URL(fileURLWithPath: args[2]),
-                                                   destination: URL(fileURLWithPath: args[3]), useGLMetal: metal)
+                                                   destination: URL(fileURLWithPath: args[3]), useGLMetal: metal, ipadIPA: ipadIPA)
         print(output.path)
         withExtendedLifetime(signals) {}
     } catch {

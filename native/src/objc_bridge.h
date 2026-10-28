@@ -40,6 +40,7 @@ int objc_bridge32_prepare_shader_cache(void);
 int objc_bridge32_run_gl_parameter_self_test(void);
 int objc_bridge32_run_gl_buffer_self_test(void);
 int objc_bridge32_run_gl_texture_self_test(void);
+int objc_bridge32_run_asphalt_scene_self_test(void);
 
 void objc_bridge32_pin_event(uint32_t, int);
 int objc_bridge32_test_key_down(unsigned key);

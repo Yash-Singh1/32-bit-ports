@@ -1078,6 +1078,11 @@ int main(int argc, char **argv)
         macho_image32_unload(&image);
         return result ? EXIT_FAILURE : EXIT_SUCCESS;
     }
+    if (getenv("LP32_ASPHALT6_SCENE_SELFTEST")) {
+        int result = objc_bridge32_run_asphalt_scene_self_test();
+        macho_image32_unload(&image);
+        return result ? EXIT_FAILURE : EXIT_SUCCESS;
+    }
     if (getenv("LP32_ASPHALT6_FLOAT_SELFTEST")) {
         int result = asphalt6_controller32_float_self_test();
         macho_image32_unload(&image);

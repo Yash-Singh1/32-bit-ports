@@ -4,6 +4,7 @@
 #include "objc_bridge.h"
 #include "focus_policy.h"
 #include "gl_core_bridge.h"
+#include "asphalt_scene.h"
 #include "carbon_ui.h"
 #include "hid_bridge.h"
 #include "dispatch_bridge.h"
@@ -55,6 +56,18 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <mach/mach_time.h>
+
+/* Forget scene metadata when Cocoa destroys a context internally rather than
+   through an imported CGLDestroyContext call. */
+@interface LP32AsphaltSceneLifetime : NSObject {
+@public
+    void *context;
+}
+@end
+@implementation LP32AsphaltSceneLifetime
+- (void)dealloc { asphalt_scene_forget_context(context); [super dealloc]; }
+@end
+static char asphalt_scene_lifetime;
 
 /* These GL 3.0 access flags are absent from Apple's legacy <OpenGL/gl.h>. */
 #ifndef GL_MAP_READ_BIT
@@ -6941,6 +6954,7 @@ static bool unit_keeps_shadow_target(void)
 
 void objc_bridge32_reconcile_fragment_shadows(void)
 {
+    asphalt_scene_before_draw();
     if (!fragment_shadow_count || !trace_fragment_program) return;
     if (!glIsEnabled(GL_FRAGMENT_PROGRAM_ARB)) return;
     CGLContextObj context = CGLGetCurrentContext();
@@ -8743,6 +8757,7 @@ FAST_GL(glDisable)
 
 FAST_GL(glBindTexture)
 {
+    asphalt_scene_resolve_texture(arguments[1]);
     (void)return_address;
     ++gl_frame_diagnostics.texture_binds;
     if (trace_gl_render_call()) {
@@ -8812,6 +8827,8 @@ FAST_GL(glGetFloatv)  { (void)return_address; glGetFloatv(arguments[0], (GLfloat
 
 lp32_fast_import_fn objc_bridge32_fast_import(const char *import_name)
 {
+    lp32_fast_import_fn scene = asphalt_scene_fast_import(import_name);
+    if (scene) return scene;
     static const struct {
         const char *name;
         lp32_fast_import_fn handler;
@@ -9195,6 +9212,8 @@ int objc_bridge32_run_carbon_input_self_test(void) {
 int objc_bridge32_dispatch(const char *import_name, const uint32_t *arguments,
                            uint64_t *result)
 {
+    lp32_fast_import_fn scene = asphalt_scene_fast_import(import_name);
+    if (scene) { *result = scene(arguments, 0); return 1; }
     if (strncmp(import_name,"CG",2)==0) {
         char normalized[128]; if(strlen(import_name)+2>sizeof(normalized))return 0;
         normalized[0]='_';strcpy(normalized+1,import_name);
@@ -10171,6 +10190,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         NSValue *wrapper = object_for_argument(arguments[0]);
         CGLContextObj context = wrapper ? [wrapper pointerValue] : NULL;
         index_shadow_forget_context(context);
+        if (context) asphalt_scene_forget_context(context);
         *result = context ? (uint32_t)CGLDestroyContext(context) : kCGLBadContext;
         return 1;
     }
@@ -11217,6 +11237,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         forget_mipmap_repairs(
             (GLsizei)arguments[0],
             (const GLuint *)(uintptr_t)arguments[1]);
+        asphalt_scene_delete_textures(arguments[0], (const GLuint *)(uintptr_t)arguments[1]);
         glDeleteTextures(arguments[0],
                          (const GLuint *)(uintptr_t)arguments[1]);
         texture_bind_cache_invalidate();
@@ -12735,7 +12756,16 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         if (lp32_title_is_gameloft(lp32_profile()->title) &&
             (!strcmp(selector_name, "makeCurrentContext") || !strcmp(selector_name, "flushBuffer")) &&
             [receiver isKindOfClass:[NSOpenGLContext class]])
+        {
             attach_owning_view((NSOpenGLContext *)receiver);
+            if (lp32_profile()->title == LP32_TITLE_ASPHALT6 &&
+                !objc_getAssociatedObject(receiver, &asphalt_scene_lifetime)) {
+                LP32AsphaltSceneLifetime *lifetime = [[LP32AsphaltSceneLifetime alloc] init];
+                lifetime->context = [(NSOpenGLContext *)receiver CGLContextObj];
+                objc_setAssociatedObject(receiver, &asphalt_scene_lifetime, lifetime, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                [lifetime release];
+            }
+        }
         if (lp32_title_is_gameloft(lp32_profile()->title) && !strcmp(selector_name, "flushBuffer") &&
             [receiver isKindOfClass:[NSOpenGLContext class]]) {
             trace_gl_view_geometry((NSOpenGLContext *)receiver);
@@ -14797,4 +14827,58 @@ int objc_bridge32_run_gl_texture_self_test(void)
              "requested ranges and streamed updates)");
     }
     return status;
+}
+
+
+/* Synthetic GPU check of the actual import bridge, before guest initializers.
+   It requires no game code, assets, window, or application activation. */
+int objc_bridge32_run_asphalt_scene_self_test(void)
+{
+    CGLPixelFormatAttribute attrs[] = {kCGLPFAAccelerated, 0};
+    CGLPixelFormatObj format = NULL; CGLContextObj context = NULL; GLint count = 0;
+    if (CGLChoosePixelFormat(attrs, &format, &count) || !format) return -1;
+    CGLError error = CGLCreateContext(format, NULL, &context);
+    CGLDestroyPixelFormat(format);
+    if (error || !context) return -1;
+    CGLSetCurrentContext(context);
+    uint32_t memory = compat_runtime32_allocate(1024, 1);
+    bool valid = memory != 0;
+    GLuint texture = 0, framebuffer = 0;
+    glGenTextures(1, &texture); glGenFramebuffers(1, &framebuffer);
+    for (unsigned fast = 0; fast < 2 && valid; ++fast) {
+        uint32_t bind_tex[] = {GL_TEXTURE_2D, texture};
+        uint32_t upload[] = {GL_TEXTURE_2D,0,GL_RGBA8,1280,720,0,GL_RGBA,GL_UNSIGNED_BYTE,0};
+        uint32_t bind[] = {GL_FRAMEBUFFER, framebuffer};
+        uint32_t attach[] = {GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,texture,0};
+        uint32_t viewport[] = {0,0,1280,720};
+        uint32_t clear = GL_COLOR_BUFFER_BIT;
+        uint32_t query[] = {GL_VIEWPORT,memory};
+        const char *names[] = {"glBindTexture", "glTexImage2D", "glBindFramebufferEXT", "glFramebufferTexture2DEXT", "glViewport", "glClear", "glGetIntegerv"};
+        const uint32_t *args[] = {bind_tex,upload,bind,attach,viewport,&clear,query};
+        glClearColor(1,0,0,1);
+        for (unsigned i=0;i<7 && valid;++i) {
+            uint64_t result = 0;
+            lp32_fast_import_fn handler = fast ? objc_bridge32_fast_import(names[i]) : NULL;
+            if(handler) handler(args[i],0);
+            else valid = objc_bridge32_dispatch(names[i],args[i],&result) != 0;
+        }
+        GLint physical[4], samples=0, width=0;
+        glGetIntegerv(GL_VIEWPORT, physical); glGetIntegerv(GL_SAMPLES,&samples);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D,0,GL_TEXTURE_WIDTH,&width);
+        valid = valid && physical[2]==3840 && physical[3]==2160 && width==3840 && samples>=2 &&
+            ((GLint *)(uintptr_t)memory)[2]==1280;
+        uint32_t unbind[] = {GL_FRAMEBUFFER,0}; uint64_t ignored;
+        objc_bridge32_dispatch("glBindFramebufferEXT",unbind,&ignored);
+        uint32_t read[] = {GL_READ_FRAMEBUFFER,framebuffer};
+        objc_bridge32_dispatch("glBindFramebufferEXT",read,&ignored);
+        unsigned char pixel[4]={0};glReadPixels(3500,100,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
+        valid = valid && pixel[0]==255 && pixel[1]==0 && glGetError()==GL_NO_ERROR;
+        fprintf(stderr,"Asphalt scene import bridge %s: %s (3840x2160, %d actual samples)\n", fast?"fast":"chained",valid?"PASS":"FAIL",samples);
+        objc_bridge32_dispatch("glBindFramebufferEXT",unbind,&ignored);
+    }
+    if(memory)compat_runtime32_deallocate(memory);
+    glDeleteFramebuffers(1,&framebuffer); glDeleteTextures(1,&texture);
+    asphalt_scene_forget_context(context); CGLSetCurrentContext(NULL); CGLDestroyContext(context);
+    texture_bind_cache_invalidate();
+    return valid ? 0 : -1;
 }

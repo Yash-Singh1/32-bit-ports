@@ -83,25 +83,33 @@ extension Converter {
         return try body(mount)
     }
 
-    func convertAsphalt6(source: URL, destination: URL, useGLMetal: Bool = false) throws -> URL {
+    func convertAsphalt6(source: URL, destination: URL, useGLMetal: Bool = false, ipadIPA: URL? = nil) throws -> URL {
         try cancellation.check()
         let source = source.resolvingSymlinksInPath().standardizedFileURL
         let destination = destination.resolvingSymlinksInPath().standardizedFileURL
+        guard source.pathExtension.lowercased() != "ipa" else {
+            throw ConversionError.message("The iPad IPA supplies optional textures. Choose the original Mac game as the source and pass the IPA with --ipad-assets.")
+        }
         let converterApp = resources.deletingLastPathComponent().deletingLastPathComponent()
+        if let ipadIPA {
+            guard ipadIPA.pathExtension.lowercased() == "ipa", FileManager.default.isReadableFile(atPath: ipadIPA.path) else {
+                throw ConversionError.message("Choose a readable Asphalt 6: Adrenaline HD 1.5.1 iPad IPA.")
+            }
+        }
         guard !isInside(destination, source),
               !(converterApp.pathExtension == "app" && isInside(destination, converterApp)) else {
             throw ConversionError.message("Choose an output folder outside the original game and the converter app.")
         }
         if source.pathExtension.lowercased() == "zip" {
-            return try withExtractedZIP(source) { try convertAsphalt6(app: Asphalt6Source.discover($0), destination: destination, useGLMetal: useGLMetal) }
+            return try withExtractedZIP(source) { try convertAsphalt6(app: Asphalt6Source.discover($0), destination: destination, useGLMetal: useGLMetal, ipadIPA: ipadIPA) }
         }
         if Asphalt6Source.isDiskImage(source) {
-            return try withMountedImage(source) { try convertAsphalt6(app: Asphalt6Source.discover($0), destination: destination, useGLMetal: useGLMetal) }
+            return try withMountedImage(source) { try convertAsphalt6(app: Asphalt6Source.discover($0), destination: destination, useGLMetal: useGLMetal, ipadIPA: ipadIPA) }
         }
-        return try convertAsphalt6(app: Asphalt6Source.discover(source), destination: destination, useGLMetal: useGLMetal)
+        return try convertAsphalt6(app: Asphalt6Source.discover(source), destination: destination, useGLMetal: useGLMetal, ipadIPA: ipadIPA)
     }
 
-    private func convertAsphalt6(app layout: Asphalt6Source, destination: URL, useGLMetal: Bool) throws -> URL {
+    private func convertAsphalt6(app layout: Asphalt6Source, destination: URL, useGLMetal: Bool, ipadIPA: URL?) throws -> URL {
         let fm = FileManager.default
         guard !isInside(destination, layout.app) else {
             throw ConversionError.message("Choose an output folder outside the original game.")
@@ -127,6 +135,10 @@ extension Converter {
         progress("Copying \(Asphalt6.title)…", "Creating your app. This creates an independent copy of the game files.")
         // The game reads its packed data, intro movie and MainMenu.nib from Resources.
         try copyGameTree(layout.resources, to: output.appendingPathComponent("Resources"), check: cancellation.check)
+        var ipadImport: [String: Any]?
+        if let ipadIPA {
+            ipadImport = try importAsphalt6IPadAssets(ipadIPA, into: output.appendingPathComponent("Resources"))
+        }
         let imagePath = output.appendingPathComponent("SharedSupport/" + stem + ".image")
         try gameImage.write(to: imagePath)
         try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: imagePath.path)
@@ -149,8 +161,13 @@ extension Converter {
         info["LP32GeneratedGame"] = "asphalt6"
         info["LP32GLMetal"] = metal != nil
         info["LP32ContinueWhenInactive"] = false
+        if let ipadImport {
+            info["LP32IPadTextures"] = ipadImport
+        }
         var environment = info["LSEnvironment"] as? [String: String] ?? [:]
         environment["LP32_GL_BACKEND"] = metal != nil ? "metal" : "apple"
+        environment["LP32_ASPHALT6_SCENE_SCALE"] = "3"
+        environment["LP32_ASPHALT6_MSAA"] = "8"
         environment.removeValue(forKey: "LP32_GLMETAL_PATH")
         info["LSEnvironment"] = environment
         try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
@@ -162,5 +179,29 @@ extension Converter {
         try layout.validate()
         try cancellation.check()
         return try publish(app, in: destination, name: stem + "-Compat")
+    }
+
+    /// Import into the unpublished copy so cancellation or an invalid IPA never
+    /// alters the original Mac game or publishes an incomplete converted app.
+    func importAsphalt6IPadAssets(_ ipa: URL, into gameResources: URL) throws -> [String: Any] {
+        let helper = resources.appendingPathComponent("asphalt6-ipad-assets")
+        guard FileManager.default.isExecutableFile(atPath: helper.path) else {
+            throw ConversionError.message("The converter is missing its iPad texture importer. Use a complete copy of Asphalt6-Converter.app.")
+        }
+        let pack = gameResources.appendingPathComponent("data/file000017.dat")
+        let imported = pack.deletingLastPathComponent().appendingPathComponent(".ipad-textures-\(UUID().uuidString).dat")
+        let report = gameResources.appendingPathComponent("Asphalt6-iPad-textures.json")
+        defer { try? FileManager.default.removeItem(at: imported) }
+        progress("Importing iPad textures…", "Decoding larger track textures and comparing their SHA-256 hashes with the Mac game.")
+        try run(helper.path, ["--import", ipa.path, pack.path, imported.path, report.path])
+        try cancellation.check()
+        guard let json = try JSONSerialization.jsonObject(with: Data(contentsOf: report)) as? [String: Any],
+              let version = json["ipadVersion"] as? String,
+              let count = json["upgradedTextures"] as? Int, count > 0 else {
+            throw ConversionError.message("The iPad texture importer returned an incomplete report.")
+        }
+        _ = try FileManager.default.replaceItemAt(pack, withItemAt: imported)
+        progress("Imported \(count) iPad textures.", "A texture hash comparison is saved inside the converted app.")
+        return ["version": version, "upgradedTextures": count, "report": report.lastPathComponent]
     }
 }

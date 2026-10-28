@@ -62,6 +62,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let choose = NSButton(title: "Choose Game…", target: nil, action: #selector(chooseSource))
     private let secondary = NSButton(title: "Cancel", target: nil, action: #selector(secondaryAction))
     private let renderer = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let ipadAssets = NSButton(title: "Add iPad IPA…", target: nil, action: #selector(chooseIPadAssets))
+    private let clearIPad = NSButton(title: "Remove", target: nil, action: #selector(removeIPadAssets))
+    private let ipadName = label("Optional iPad textures", size: 12)
+    private var ipadIPA: URL?
     private let another = NSButton(title: "Convert Another", target: nil, action: #selector(convertAnother))
     private var converter: Converter?
     private var result: URL?
@@ -88,7 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         root.addItem(menuItem)
         NSApp.mainMenu = root
 
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 440),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 490),
                           styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.title = "Asphalt 6 Converter"
         window.isReleasedWhenClosed = false
@@ -106,16 +110,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         secondary.isHidden = true
         renderer.addItems(withTitles: ["Apple OpenGL (recommended)", "GLMetal (experimental)"])
         another.isHidden = true
-        for button in [choose, secondary, another] {
+        clearIPad.isHidden = true
+        ipadName.lineBreakMode = .byTruncatingMiddle
+        ipadName.maximumNumberOfLines = 1
+        ipadName.textColor = .secondaryLabelColor
+        for button in [choose, secondary, another, ipadAssets, clearIPad] {
             button.bezelStyle = .rounded
             button.target = self
         }
         choose.keyEquivalent = "\r"
         let buttons = NSStackView(views: [secondary, choose, another])
         let options = NSStackView(views: [label("Graphics:", size: 13), renderer])
+        let assets = NSStackView(views: [ipadAssets, ipadName, clearIPad])
+        assets.spacing = 8
         options.spacing = 12
         buttons.spacing = 8
-        for view in [title, subtitle, options, drop, progress, buttons, footnote] {
+        for view in [title, subtitle, options, assets, drop, progress, buttons, footnote] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
@@ -130,7 +140,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             subtitle.centerXAnchor.constraint(equalTo: content.centerXAnchor),
             options.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 18),
             options.centerXAnchor.constraint(equalTo: content.centerXAnchor),
-            drop.topAnchor.constraint(equalTo: options.bottomAnchor, constant: 18),
+            assets.topAnchor.constraint(equalTo: options.bottomAnchor, constant: 12),
+            assets.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            assets.leadingAnchor.constraint(greaterThanOrEqualTo: content.leadingAnchor, constant: 28),
+            assets.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -28),
+            ipadName.widthAnchor.constraint(lessThanOrEqualToConstant: 290),
+            drop.topAnchor.constraint(equalTo: assets.bottomAnchor, constant: 18),
             drop.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 28),
             drop.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -28),
             drop.heightAnchor.constraint(equalToConstant: 160),
@@ -185,10 +200,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         choose.title = "Choose Game…"
         status.stringValue = "Drop \(Asphalt6.title) here"
         detail.stringValue = "Drop the 32-bit Mac app (Asphalt 6.app), a folder, a ZIP archive, or a disk image."
+        removeIPadAssets()
+        ipadAssets.isEnabled = true
+    }
+
+    @objc private func chooseIPadAssets() {
+        guard converter == nil, !choosing else { return }
+        choosing = true
+        let panel = NSOpenPanel()
+        panel.message = "Choose Asphalt 6: Adrenaline HD 1.5.1 for iPad. Its larger track textures will be added when you convert the Mac game."
+        panel.prompt = "Use iPad Textures"
+        panel.allowedContentTypes = [UTType(filenameExtension: "ipa") ?? .data]
+        panel.allowsMultipleSelection = false
+        panel.beginSheetModal(for: window) { response in
+            self.choosing = false
+            if response == .OK, let url = panel.url { self.selectIPadAssets(url) }
+        }
+    }
+
+    private func selectIPadAssets(_ url: URL) {
+        ipadIPA = url
+        ipadName.stringValue = url.lastPathComponent
+        ipadName.toolTip = url.path
+        clearIPad.isHidden = false
+        if result == nil {
+            status.stringValue = "iPad textures selected."
+            detail.stringValue = "Now choose or drop the original Mac game to convert it with these textures."
+        }
+    }
+
+    @objc private func removeIPadAssets() {
+        ipadIPA = nil
+        ipadName.stringValue = "Optional iPad textures"
+        ipadName.toolTip = nil
+        clearIPad.isHidden = true
     }
 
     private func selectDestination(for source: URL) {
         guard converter == nil, !choosing else { NSSound.beep(); return }
+        if source.pathExtension.lowercased() == "ipa" {
+            selectIPadAssets(source)
+            return
+        }
         // Disk images are checked once mounted, during conversion.
         if !Asphalt6Source.isArchive(source) {
             do { _ = try Asphalt6Source.discover(source) } catch { showError(error); return }
@@ -213,6 +266,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         choose.title = "Choose Game…"
         choose.isEnabled = false
         renderer.isEnabled = false
+        ipadAssets.isEnabled = false
+        clearIPad.isEnabled = false
         another.isHidden = true
         secondary.title = "Cancel"
         secondary.isEnabled = true
@@ -229,8 +284,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         converter = worker
         let metal = renderer.indexOfSelectedItem == 1
+        let ipa = ipadIPA
         DispatchQueue.global(qos: .userInitiated).async {
-            let outcome = Result { try worker.convertAsphalt6(source: source, destination: destination, useGLMetal: metal) }
+            let outcome = Result { try worker.convertAsphalt6(source: source, destination: destination, useGLMetal: metal, ipadIPA: ipa) }
             DispatchQueue.main.async { self.finish(outcome) }
         }
     }
@@ -241,12 +297,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         progress.isHidden = true
         choose.isEnabled = true
         renderer.isEnabled = true
+        ipadAssets.isEnabled = result == nil
+        clearIPad.isEnabled = true
         secondary.isEnabled = true
         secondary.isHidden = true
         drop.enabled = true
         switch outcome {
         case .success(let url):
             result = url
+            ipadAssets.isEnabled = false
+            clearIPad.isEnabled = false
             another.isHidden = false
             status.stringValue = "Your \(Asphalt6.title) app is ready."
             detail.stringValue = url.path

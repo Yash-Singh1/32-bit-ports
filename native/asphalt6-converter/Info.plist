@@ -14,9 +14,17 @@
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSHumanReadableCopyright</key><string>32bitgoofy. Requires your own Mac copy of Asphalt 6: Adrenaline.</string>
     <key>CFBundleDocumentTypes</key><array><dict>
-        <key>CFBundleTypeName</key><string>Asphalt 6: Adrenaline app, game folder, ZIP archive or disk image</string>
+        <key>CFBundleTypeName</key><string>Asphalt 6: Adrenaline Mac game or optional iPad IPA textures</string>
         <key>CFBundleTypeRole</key><string>Viewer</string>
         <key>LSHandlerRank</key><string>Alternate</string>
-        <key>LSItemContentTypes</key><array><string>com.apple.application-bundle</string><string>public.folder</string><string>com.apple.disk-image-udif</string><string>public.zip-archive</string></array>
+        <key>LSItemContentTypes</key><array><string>com.apple.application-bundle</string><string>public.folder</string><string>com.apple.disk-image-udif</string><string>public.zip-archive</string><string>org.32bitgoofy.ipad-ipa</string></array>
+    </dict></array>
+    <key>UTImportedTypeDeclarations</key><array><dict>
+        <key>UTTypeIdentifier</key><string>org.32bitgoofy.ipad-ipa</string>
+        <key>UTTypeDescription</key><string>iPad app archive</string>
+        <key>UTTypeConformsTo</key><array><string>public.zip-archive</string></array>
+        <key>UTTypeTagSpecification</key><dict>
+            <key>public.filename-extension</key><array><string>ipa</string></array>
+        </dict>
     </dict></array>
 </dict></plist>

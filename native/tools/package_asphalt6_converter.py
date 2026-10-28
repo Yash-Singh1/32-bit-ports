@@ -20,6 +20,16 @@ def package(build, glmetal):
         loader = contents / 'Resources/game_loader'
         shutil.copy2(build / 'game_loader', loader)
         run('codesign', '--force', '--sign', '-', loader)
+        importer = contents / 'Resources/asphalt6-ipad-assets'
+        run('lipo', '-create', build / 'asphalt6-ipad-assets-arm64', build / 'asphalt6-ipad-assets-x86_64',
+            '-output', importer)
+        run('codesign', '--force', '--sign', '-', importer)
+        notices = contents / 'Resources/ThirdParty'
+        third_party = Path(__file__).resolve().parents[1] / 'third_party'
+        for library in ('powervr', 'stb'):
+            (notices / library).mkdir(parents=True)
+            for name in ('README.md', 'LICENSE.md' if library == 'powervr' else 'LICENSE'):
+                shutil.copy2(third_party / library / name, notices / library / name)
         install(glmetal, contents / 'Frameworks/GLMetal', contents / 'Resources/GLMetal-build-info.json')
         shutil.copy2(Path(__file__).resolve().parents[1] / 'asphalt6-converter/Info.plist', contents / 'Info.plist')
         run('codesign', '--force', '--sign', '-', staged)

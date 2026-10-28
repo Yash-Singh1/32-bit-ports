@@ -43,6 +43,54 @@ to choose a runtime download cache. New conversions use numbered names if an
 output already exists. ZIP extraction uses a temporary directory, and disk
 images mount read-only. Conversion leaves the original source unchanged.
 
+## Optional iPad textures
+
+Current source builds accept an Asphalt 6: Adrenaline HD **1.5.1 iPad IPA**
+alongside the original Mac game. The published Dev 3 download predates this
+option. Click **Add iPad IPA…**, or drop the IPA into the converter, then
+choose the original Mac app, ZIP or disk image and an output folder.
+The IPA supplies track textures; the Mac release supplies the executable
+and the rest of the game.
+
+```sh
+native/build/Asphalt6-Converter.app/Contents/MacOS/Asphalt6Converter \
+  --convert /path/to/Asphalt.6.zip /path/to/output \
+  --ipad-assets /path/to/Asphalt_6__Adrenaline_HD_1.5.1_ios_3.2.ipa
+```
+
+The importer selects existing track textures with matching base names and
+aspect ratios, including the iPad's larger `_x2` variants. It decodes PVRTC
+and encodes DXT3 DDS textures with the supplied mipmaps and alpha. It never
+resizes images to manufacture larger textures. `_IPAD2` names remain distinct
+because their atlas layouts have not been verified against the Mac version.
+The Mac pack's entry names stay intact. The game code, meshes, shaders, UI,
+resource index and saves continue to come from the Mac copy.
+
+The supplied 1.5.1 IPA yields 118 larger Mac pack entries from 59 iPad
+textures. Some entries are aliases for the same texture with different
+compression or mipmap names. The supplied packs share 371 exact entry
+names. SHA-256 hashes match for 57 entries; 311 pairs use DDS on Mac and
+PVRTC on iPad, two use TGA on Mac and PVRTC on iPad, and one TGA pair differs.
+Different hashes across these formats do not establish different artwork.
+
+Every import saves `Contents/Resources/Asphalt6-iPad-textures.json` inside
+the output app. It lists hashes for all 855 Mac and 613 iPad track pack
+entries, exact-name matches, selected replacements, dimensions and hashes
+of the converted DDS entries. Hashes cover each decompressed archive entry,
+including the texture header and its compressed image data.
+
+The packaged importer is native and universal; users need no additional
+tools or downloads for texture conversion. Its PowerVR decoder and stb
+color encoder retain their upstream licenses under `Resources/ThirdParty`.
+
+```sh
+make -C native test-asphalt6-ipad-assets test-asphalt6-converter
+```
+
+The importer has been tested with generated constant-color and alpha
+textures and with the supplied IPA. Actual gameplay appearance remains
+unverified; no game code was launched for the import checks.
+
 The development bundle target also accepts these source types:
 
 ```sh
@@ -52,6 +100,48 @@ make -C native GAME=asphalt6 SOURCE_APP=/path/to/Asphalt.6.zip bundle
 Use `ASPHALT6_GL=metal` to test GLMetal or `GLMETAL_SOURCE=/path/to/glmetal`
 to use a separately built GLMetal checkout. After runtime changes,
 `make -C native GAME=asphalt6 promote-loader` updates an existing app's loader.
+
+## 4K scene rendering and MSAA
+
+Current source builds include this scene layer; the published Dev 3 converter
+predates it. New conversions automatically render the 3D scene at 3840×2160 and request
+8× MSAA. This is built into the Mac loader. No mod archive, Windows files,
+or additional import step is needed.
+
+The scene layer scales the game's offscreen textures and depth/stencil
+buffers, redirects drawing to multisampled framebuffers, and resolves them
+into the original scene textures before compositing. The original
+2048×1024 padded allocations become 6144×3072, while their 1280×720 scene
+viewport becomes 3840×2160. Normalized texture coordinates keep the same
+ratios. Window size, HUD coordinates and mouse input retain their existing
+coordinate system.
+
+The driver limits the sample request to supported hardware. Logs report the
+actual sample count allocated. If multisample allocation fails, the loader
+keeps the high-resolution scene and reports that MSAA could not be enabled.
+This mode uses more GPU memory and rendering time than the original scene.
+
+For lower-cost settings, override `LP32_ASPHALT6_SCENE_SCALE=2` for a
+2560×1440 scene and `LP32_ASPHALT6_MSAA=4` for four samples. Scale 1 and
+MSAA 0 restore the original rendering path. Finder launches read the defaults
+from the converted app's `LSEnvironment`; direct executable launches can use
+ordinary environment overrides.
+
+Offscreen GPU fixtures verify full-resolution pixels beyond the original
+1280×720 area, eight actual samples, fractional edge coverage, color and
+depth resolves, downsampled readback, scene-to-texture copies, logical
+viewport/scissor queries, reallocation and deletion. They pass with legacy
+and core Apple OpenGL contexts and GLMetal. A synthetic image also checks
+both fast and chained loader import dispatch with each backend. No game
+was launched for this implementation; gameplay appearance and performance
+still need validation.
+
+```sh
+make -C native test-asphalt6-scene test-asphalt6-scene-metal test-asphalt6-scene-bridge
+```
+
+See [the Windows mod comparison](ASPHALT6-WINDOWS-MOD.md) for the static
+analysis that informed this implementation.
 
 ## Runtime
 
