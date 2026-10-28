@@ -7,7 +7,7 @@ version 1.0.9, with an i386 Mach-O executable and packed data in
 
 ## Build and convert
 
-Download [Asphalt 6 Converter 0.0.0-dev.3](https://github.com/Yash-Singh1/32-bit-ports/releases/tag/asphalt6-converter-v0.0.0-dev.3),
+Download [Asphalt 6 Converter 0.0.0-dev.4](https://github.com/Yash-Singh1/32-bit-ports/releases/tag/asphalt6-converter-v0.0.0-dev.4),
 unzip it and open `Asphalt6-Converter.app`. The download includes the loader
 and does not require Xcode, Python or a source checkout. It contains no game
 data or Apple runtime libraries. This development build uses ad hoc signing
@@ -45,9 +45,9 @@ images mount read-only. Conversion leaves the original source unchanged.
 
 ## Optional iPad textures
 
-Current source builds accept an Asphalt 6: Adrenaline HD **1.5.1 iPad IPA**
-alongside the original Mac game. The published Dev 3 download predates this
-option. Click **Add iPad IPA…**, or drop the IPA into the converter, then
+Dev 4 accepts an optional Asphalt 6: Adrenaline HD **1.5.1 iPad IPA**
+alongside the original Mac game. Conversion also works with the Mac game
+alone. Click **Add iPad IPA…**, or drop the IPA into the converter, then
 choose the original Mac app, ZIP or disk image and an output folder.
 The IPA supplies track textures; the Mac release supplies the executable
 and the rest of the game.
@@ -103,8 +103,8 @@ to use a separately built GLMetal checkout. After runtime changes,
 
 ## 4K scene rendering and MSAA
 
-Current source builds include this scene layer; the published Dev 3 converter
-predates it. New conversions automatically render the 3D scene at 3840×2160 and request
+Dev 4 includes the scene layer. New conversions automatically render the
+3D scene at 3840×2160 and request
 8× MSAA. This is built into the Mac loader. No mod archive, Windows files,
 or additional import step is needed.
 
@@ -310,6 +310,16 @@ strict signatures passed. With developer tools excluded from PATH, the
 extracted converter converted the supplied ZIP using an existing runtime
 cache. The output retained the original executable and all 5,192 resource
 files, selected Apple OpenGL and passed signature verification.
+
+The Dev 4 release ZIP also matched the built app's bytes and permissions.
+Build 4, universal interface/importer architectures and strict signatures
+passed. With developer tools excluded from PATH, the extracted converter
+converted the Mac ZIP both alone and with the optional 1.5.1 IPA. Both
+outputs retained the Mac executable and enabled 4K/8× MSAA defaults. The
+Mac-only output retained the original texture pack. The IPA output replaced
+118 entries and preserved the other 737 entries; all archive entries passed
+CRC checks and replacement hashes matched the report. These checks did not
+launch the game.
 
 ```sh
 make -C native test-asphalt6-converter test-asphalt6-glsl test-game-profile test-gl-core-bridge test-objc-proxy test-display-bridge
