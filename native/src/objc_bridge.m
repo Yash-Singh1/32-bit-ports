@@ -1924,6 +1924,57 @@ static size_t guest_words_for_type(const char *type)
     }
 }
 
+/* Preserve the requested format; only relax a failed renderer pin. Some
+   dual-GPU Intel Macs enumerate an iGPU that cannot supply the legacy format
+   while their discrete GPU can. The original game dereferences glGetString
+   without checking whether context creation succeeded. */
+static NSOpenGLPixelFormat *portal_pixel_format(
+    NSOpenGLPixelFormat *receiver,
+    const NSOpenGLPixelFormatAttribute *attributes)
+{
+    NSOpenGLPixelFormat *format = [receiver
+        initWithAttributes:attributes];
+    if (!format && attributes) {
+        /* A dual-GPU Intel Mac can enumerate a renderer which cannot
+           supply this legacy format. Retry the same format without
+           pinning it to that renderer; CGL selects a capable GPU. */
+        NSOpenGLPixelFormatAttribute fallback[64];
+        size_t input = 0, output = 0;
+        bool removed_renderer = false;
+        while (input < 62 && attributes[input]) {
+            NSOpenGLPixelFormatAttribute attribute = attributes[input++];
+            bool takes_value = attribute == NSOpenGLPFAAuxBuffers ||
+                attribute == NSOpenGLPFAColorSize ||
+                attribute == NSOpenGLPFAAlphaSize ||
+                attribute == NSOpenGLPFADepthSize ||
+                attribute == NSOpenGLPFAStencilSize ||
+                attribute == NSOpenGLPFAAccumSize ||
+                attribute == NSOpenGLPFASampleBuffers ||
+                attribute == NSOpenGLPFASamples ||
+                attribute == NSOpenGLPFARendererID ||
+                attribute == NSOpenGLPFAScreenMask ||
+                attribute == NSOpenGLPFAOpenGLProfile ||
+                attribute == NSOpenGLPFAVirtualScreenCount;
+            if (attribute == NSOpenGLPFARendererID) {
+                ++input;
+                removed_renderer = true;
+                continue;
+            }
+            fallback[output++] = attribute;
+            if (takes_value) fallback[output++] = attributes[input++];
+        }
+        fallback[output] = 0;
+        if (removed_renderer && input < 63 && !attributes[input]) {
+            format = [[NSOpenGLPixelFormat alloc]
+                initWithAttributes:fallback];
+            fprintf(stderr, "compat32: unavailable OpenGL renderer; "
+                    "automatic GPU selection %s\n",
+                    format ? "succeeded" : "failed");
+        }
+    }
+    return format;
+}
+
 static bool invoke_simple_message(id receiver, const char *selector_name,
                                   const uint32_t *guest_arguments,
                                   uint64_t *guest_result)
@@ -9369,6 +9420,14 @@ static int objc_bridge32_dispatch_body(const char *import_name,
                     arguments[0], selector_name ? selector_name : "(null)");
             return 0;
         }
+        if (lp32_profile()->title == LP32_TITLE_PORTAL2 &&
+            strcmp(selector_name, "initWithAttributes:") == 0 &&
+            [receiver isKindOfClass:[NSOpenGLPixelFormat class]]) {
+            const NSOpenGLPixelFormatAttribute *attributes =
+                (const void *)(uintptr_t)arguments[2];
+            *result = proxy_for_object(portal_pixel_format(receiver, attributes));
+            return 1;
+        }
         if (lp32_profile_is_source() &&
             strcmp(selector_name, "flushBuffer") == 0 &&
             [receiver isKindOfClass:[NSOpenGLContext class]]) {
@@ -9666,6 +9725,64 @@ uint32_t objc_bridge32_pointer_import(const char *import_name)
         return proxy_for_object(NSWindowWillCloseNotification);
     }
     return 0;
+}
+
+int objc_bridge32_run_pixel_format_self_test(void)
+{
+    @autoreleasepool {
+        [NSApplication sharedApplication];
+        /* A zero attribute value is data, not the list terminator. */
+        const NSOpenGLPixelFormatAttribute pinned[] = {
+            NSOpenGLPFADoubleBuffer, NSOpenGLPFAColorSize, 24,
+            NSOpenGLPFADepthSize, 0, NSOpenGLPFAAccumSize, 0,
+            NSOpenGLPFARendererID, 0xffffffff, 0,
+        };
+        NSOpenGLPixelFormat *original = [[NSOpenGLPixelFormat alloc]
+            initWithAttributes:pinned];
+        if (original) {
+            [original release];
+            fputs("pixel-format-selftest: invalid renderer was accepted\n", stderr);
+            return -1;
+        }
+        NSOpenGLPixelFormatAttribute saved[sizeof(pinned) / sizeof(pinned[0])];
+        memcpy(saved, pinned, sizeof(pinned));
+        NSOpenGLPixelFormat *format = portal_pixel_format(
+            [NSOpenGLPixelFormat alloc], pinned);
+        NSOpenGLContext *context = [[NSOpenGLContext alloc]
+            initWithFormat:format shareContext:nil];
+        [context makeCurrentContext];
+        bool usable = context && glGetString(GL_RENDERER) &&
+            memcmp(saved, pinned, sizeof(pinned)) == 0;
+        [NSOpenGLContext clearCurrentContext];
+        [context release];
+        [format release];
+        if (!usable) {
+            fputs("pixel-format-selftest: renderer fallback has no usable context\n", stderr);
+            return -1;
+        }
+        const NSOpenGLPixelFormatAttribute impossible[] = {
+            NSOpenGLPFAMinimumPolicy, NSOpenGLPFAColorSize, 8192,
+            NSOpenGLPFARendererID, 0xffffffff, 0,
+        };
+        format = portal_pixel_format([NSOpenGLPixelFormat alloc], impossible);
+        if (format) {
+            [format release];
+            fputs("pixel-format-selftest: fallback relaxed the color requirement\n", stderr);
+            return -1;
+        }
+        const NSOpenGLPixelFormatAttribute automatic[] = {
+            NSOpenGLPFADoubleBuffer, NSOpenGLPFAColorSize, 24, 0,
+        };
+        format = portal_pixel_format([NSOpenGLPixelFormat alloc], automatic);
+        if (!format) {
+            fputs("pixel-format-selftest: unpinned format failed\n", stderr);
+            return -1;
+        }
+        [format release];
+        puts("pixel-format-selftest: PASS (failed renderer pin, usable GL context, "
+             "zero values, unchanged input, retained format constraints, unpinned format)");
+        return 0;
+    }
 }
 
 int objc_bridge32_run_gl_parameter_self_test(void)

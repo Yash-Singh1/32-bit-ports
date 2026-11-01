@@ -89,6 +89,10 @@ LDFLAGS := -Wl,-no_pie,-pagezero_size,0x1000,-segaddr,__TEXT,0x100000000,-segadd
 
 all: $(BUILD_DIR)/mode32_probe $(BUILD_DIR)/game_loader
 
+.PHONY: test-pixel-format
+test-pixel-format: $(BUILD_DIR)/game_loader
+	env LP32_PIXEL_FORMAT_SELFTEST=1 arch -x86_64 ./$(BUILD_DIR)/game_loader
+
 .PHONY: test-macho-file test-guest-dyld test-portal2-loader test-cursor-state
 .PHONY: test-steam-abi test-steam-filename test-steam-startup test-source-steam-startup test-portal2-coop
 

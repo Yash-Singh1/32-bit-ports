@@ -9,6 +9,29 @@ the game launches and runs correctly. Sustained gameplay remains unverified.
 The current work lives on the `portal2` branch in a separate checkout. No game
 binaries or data are tracked by Git.
 
+## Native Intel Macs
+
+The source loader supports native x86_64 execution as well as Rosetta 2.
+Native execution needs flat user data/stack selectors before entering i386
+code, including when returning from a bridged import; Rosetta does not enforce
+that requirement. `make` builds `build/mode32_probe`, which checks a real i386
+round trip on either host.
+
+On dual-GPU Macs, an enumerated renderer can reject the game's legacy pixel
+format even though another GPU supports it. The Portal 2 Cocoa bridge first
+tries the original attributes. If that fails with an explicit renderer ID, it
+retries without that ID, preserving every other format requirement. Run
+`make test-pixel-format` to exercise an unavailable renderer, a real usable GL
+context, zero-valued attributes, and an unsatisfiable format that must still
+fail. This test needs access to the macOS graphical session.
+
+Validated on a MacBookPro16,1 with an Intel Core i7 and AMD Radeon Pro 5300M,
+macOS 26.7.1 (25G241). A locally patched dev.6 app rendered the menu, loaded a
+saved single-player level, and was played and then quit by its owner. This is
+a short gameplay check, not a full playthrough or online co-op validation.
+The published dev.6 converter predates these fixes; build from source to use
+them until an updated converter is released.
+
 ## Building and running
 
 Opening a converted app now checks Steam before starting the game. If Steam
