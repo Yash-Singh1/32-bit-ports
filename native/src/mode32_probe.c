@@ -12,6 +12,8 @@
 #include <sys/sysctl.h>
 #include <unistd.h>
 
+int lp32_native_intel;
+
 extern uint32_t run_compat32(uint32_t eip, uint32_t esp, uint16_t cs32);
 
 enum {
@@ -116,10 +118,7 @@ int main(void)
     const bool translated = process_is_translated();
     printf("host: arch=x86_64 translated=%s cs64=0x%04x\n",
            translated ? "yes" : "no", cs64);
-    if (!translated) {
-        fprintf(stderr, "mode32_probe: run this x86_64 executable through Rosetta\n");
-        return EXIT_FAILURE;
-    }
+    lp32_native_intel = !translated;
 
     int ldt_index = allocate_cs32();
     uint16_t cs32 = (uint16_t)((ldt_index << 3) | 7);

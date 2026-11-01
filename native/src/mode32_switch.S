@@ -20,6 +20,16 @@ _run_compat32:
     movl %edi, (%rsp)
     movl %edx, 4(%rsp)
     movl %esi, %r14d
+    /* Native compatibility mode requires usable data and stack selectors.
+       Rosetta permits null selectors, but real Intel raises #GP for DS
+       memory operands. USER_DS (0x23) is XNU's flat user data selector. */
+    cmpl $0, _lp32_native_intel(%rip)
+    je 9f
+    movw $0x23, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %ss
+9:
     xchgq %r14, %rsp
     ljmp *(%r14)
     ud2

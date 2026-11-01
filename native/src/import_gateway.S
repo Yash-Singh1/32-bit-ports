@@ -57,6 +57,13 @@ _lp32_import_gateway:
     movl %ecx, (%rsp)
     movzwl _lp32_cs32(%rip), %ecx
     movl %ecx, 4(%rsp)
+    cmpl $0, _lp32_native_intel(%rip)
+    je 9f
+    movw $0x23, %cx
+    movw %cx, %ds
+    movw %cx, %es
+    movw %cx, %ss
+9:
     leal 4(%r14), %r14d
     xchgq %r14, %rsp
     ljmp *(%r14)
