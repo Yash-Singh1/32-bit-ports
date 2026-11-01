@@ -802,6 +802,10 @@ int main(int argc, char **argv)
         raise(SIGSEGV);
         return EXIT_FAILURE;
     }
+    if (getenv("LP32_PIXEL_FORMAT_SELFTEST")) {
+        return objc_bridge32_run_pixel_format_self_test() == 0 ?
+            EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (getenv("LP32_OBJC_PROXY_SELFTEST")) {
         return objc_bridge32_run_proxy_self_test() == 0 ?
             EXIT_SUCCESS : EXIT_FAILURE;

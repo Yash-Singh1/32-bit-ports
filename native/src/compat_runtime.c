@@ -65,6 +65,8 @@ extern const uint8_t lp32_context_longjmp[], lp32_context_fast_longjmp[];
 extern const uint8_t lp32_context_save_helper[], lp32_context_restore_helper[];
 
 uint16_t lp32_cs32;
+/* Shared with the assembly entry and import-return trampolines. */
+int lp32_native_intel;
 _Thread_local int lp32_leave_guest;
 _Thread_local int lp32_return_fp_kind;
 _Thread_local union {
@@ -3122,10 +3124,9 @@ const struct macho_image32 *compat_runtime32_image(void)
 
 int compat_runtime32_initialize(struct macho_image32 *image)
 {
-    if (!process_is_translated()) {
-        errno = ENOTSUP;
-        return runtime_error("x86_64 host is not running through Rosetta");
-    }
+    lp32_native_intel = !process_is_translated();
+    fprintf(stderr, "compat32: execution host=%s\n",
+            lp32_native_intel ? "native Intel" : "Rosetta");
     current_image = image;
     if (initialize_import_callee_pop_cache(image) != 0)
         return runtime_error("allocate import struct-return cache");
