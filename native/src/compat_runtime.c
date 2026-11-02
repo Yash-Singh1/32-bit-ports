@@ -4850,6 +4850,9 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
     if (import_is(name, "_fopen")) {
         const char *path = (const char *)(uintptr_t)arguments[0];
         const char *mode = (const char *)(uintptr_t)arguments[1];
+        if (getenv("LP32_TRACE_FILES") && getenv("LP32_TRACE_FILES")[0] == '3') {
+            fprintf(stderr, "compat32: opening %s (%s)\n", path ? path : "(null)", mode ? mode : "");
+        }
         FILE *file = fopen(path, mode);
         if (!file && getenv("LP32_TRACE_FILES")) {
             fprintf(stderr, "compat32: fopen failed: %s (%s)\n",

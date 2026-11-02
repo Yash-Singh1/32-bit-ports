@@ -2,7 +2,7 @@
 """Generate compact ABI facts from Valve's Steamworks 1.53a JSON and matching headers.
 
 Usage: generate_steam_abi.py JSON HEADER_DIRECTORY OUTPUT_INC
-Also supply SDK 1.32's client header as isteamclient017.h and SDK 1.52's input
+Also supply SDK 1.41's client header as isteamclient017.h and SDK 1.52's input
 header as isteaminput005.h in HEADER_DIRECTORY.
 
 Inputs are development-only; the loader/converter do not download SDK files.
@@ -212,9 +212,12 @@ for obj in api["interfaces"]:
         methods.append((m["methodname"], ret, args))
     interfaces.append((version, start, len(entries)))
 # libsteam_api also asks for its older client facade during InitSafe. The
-# v1.32 header (3aa76d12fa78) describes SteamClient017's distinct ordinals.
+# v1.41 header (ef207e7697c2) describes SteamClient017's Mac ordinals and
+# its appended ParentalSettings accessor.
 legacy_header = (Path(sys.argv[2]) / "isteamclient017.h").read_text(encoding="latin1")
 legacy_names = re.findall(r"virtual\s+[\w\s*&]+?\b(\w+)\s*\(", legacy_header)
+# The SDK declares this extra slot only for _PS3, never for the Mac client.
+legacy_names = [name for name in legacy_names if name != "GetISteamPS3OverlayRender"]
 client = next(i for i in interfaces if i[0] == "SteamClient020")
 client_methods = {m[0]: m for m in methods[client[1]:client[1] + client[2]]}
 legacy_start = len(methods)

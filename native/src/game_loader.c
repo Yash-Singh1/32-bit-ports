@@ -752,7 +752,7 @@ static const char *default_image_path(const char *argv0, char *buffer,
                                       size_t size,
                                       const struct lp32_game_profile **hint)
 {
-    static const char *const candidates[] = {"LEGOPirates", "LEGOCloneWars", "Portal2", "L4D2"};
+    static const char *const candidates[] = {"LEGOPirates", "LEGOCloneWars", "Portal2", "PortalStoriesMel", "L4D2"};
     const char *slash = strrchr(argv0, '/');
     size_t directory_length = slash ? (size_t)(slash - argv0) : 0;
     for (size_t index = 0; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {

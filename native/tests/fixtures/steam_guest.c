@@ -79,7 +79,25 @@ int check_steam(void) {
     if (!legacy || status) return -81;
     METHOD(legacy, 19, frame_fn)(legacy);
     if (METHOD(legacy, 20, app_fn)(legacy) != 1) return -82;
+    /* SteamClient017's PS3-only slot is absent from the Mac vtable. */
+    void *http = METHOD(legacy, 23, get_fn)(legacy, 17, 23, "STEAMHTTP_INTERFACE_VERSION002");
+    typedef unsigned (*http_fn)(void *, int, const char *);
+    if (!http || METHOD(http, 0, http_fn)(http, 1, "https://fixture.invalid") != 0x1234abcd) return -93;
+    void *old_user = get(client, 17, 23, "SteamUser019");
+    void *old_utils = get(client, 17, 23, "SteamUtils009");
+    if (!old_user || !old_utils || METHOD(old_user, 2, id_fn)(old_user) != UINT64_C(0x123456789abcdef0) ||
+        METHOD(old_utils, 9, app_fn)(old_utils) != 620 ||
+        strcmp(METHOD(old_utils, 4, string_fn)(old_utils), "fixture-country")) return -94;
+    void *parental = METHOD(legacy, 36, get_fn)(legacy, 17, 23, "STEAMPARENTALSETTINGS_INTERFACE_VERSION001");
+    typedef bool (*enabled_fn)(void *);
+    if (!parental || !METHOD(parental, 0, enabled_fn)(parental)) return -96;
+    void *old_storage = get(client, 17, 23, "STEAMREMOTESTORAGE_INTERFACE_VERSION014");
+    typedef uint64_t (*subscribed_fn)(void *, unsigned);
+    if (!old_storage || METHOD(old_storage, 43, subscribed_fn)(old_storage, 0) != UINT64_C(0x123456789abcdef0)) return -97;
     typedef void (*check_fn)(void *, bool (*)(int));
+    checked_callback = 0;
+    METHOD(legacy, 33, check_fn)(legacy, registered_callback);
+    if (checked_callback != 1040044) return -95;
     METHOD(client, 34, check_fn)(client, registered_callback);
     checked_callback = 0;
     struct callback { int user, id; uint32_t *data; int size; } cb;

@@ -271,6 +271,24 @@ static const struct lp32_game_profile portal2_profile = {
     .source_game_directory = "portal2",
 };
 
+/* Portal Stories: Mel ships the same launcher with its own Steam identity. */
+static const struct lp32_game_profile portal_stories_mel_profile = {
+    .title = LP32_TITLE_PORTAL2,
+    .name = "PortalStoriesMel",
+    .display_name = "Portal Stories: Mel",
+    .log_directory = "PortalStoriesMelCompat",
+    .image_file = "PortalStoriesMel.image",
+    .entry_eip = 0x00001cf0,
+    .image_end = 0x0000335c,
+    .main_address = 0x00001d60,
+    .thread_argument_is_direct = 1,
+    .callee_pops_struct_return = 1,
+    .steam_app_id = 317400,
+    .source_data_directory = "PortalStoriesMel",
+    .source_executable = "portal2_osx",
+    .source_game_directory = "portal_stories",
+};
+
 /* Steam Mac depot 553: hl2_osx UUID 45DE3007-ADDB-36ED-BE1C-F1FF3383D658.
    _main is exported at 0x1e00. libtier0 passes allocated thread contexts directly;
    launcher's objc_msgSend_stret callers compensate the callee's four-byte pop. */
@@ -303,6 +321,7 @@ static const struct lp32_game_profile *const known_profiles[] = {
     &pirates_profile,
     &clone_wars_profile,
     &portal2_profile,
+    &portal_stories_mel_profile,
     &l4d2_profile,
 };
 
