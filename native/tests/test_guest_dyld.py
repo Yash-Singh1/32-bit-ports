@@ -144,6 +144,7 @@ extern int check_directory(void);
 extern int check_font(void);
 extern int check_cf_bridge(void);
 extern int check_context(void);
+extern int check_deep_callback_stack(void);
 extern int check_mach_ipc(void);
 extern int check_steam(void);
 extern int check_wide_scan(void);
@@ -185,6 +186,10 @@ __attribute__((constructor)) static void initialize(void) {
     ++count;
 }
 int LauncherMain(void) {
+    if (getenv("LP32_CALLBACK_STACK_ONLY")) {
+        int error = check_deep_callback_stack();
+        return error ? error : 26;
+    }
     /* Query through real i386 imports, including a short buffer and guarded
        output cells. Report the original executable, not the native loader. */
     const char *expected_root = getenv("LP32_FIXTURE_EXPECTED_ROOT");
@@ -505,6 +510,10 @@ int check_directory(void) {
                            LP32_DYLD_FIXTURE_SELFTEST="1", LP32_LOG_DIR=str(root / "logs"),
                            LP32_STEAM_FIXTURE=str(root / "steamclient.dylib"),
                            LP32_FIXTURE_EXPECTED_ROOT=str(root), LP32_FIXTURE_EXPECTED_EXECUTABLE=TEST_EXECUTABLE)
+        if os.getenv("LP32_CALLBACK_STACK_ONLY"):
+            run("arch", "-x86_64", str(LOADER), str(image), env=environment)
+            print(f"Guest callback stack: PASS (macOS {version}, address 0x{address:x})")
+            continue
         for index, error in enumerate((65, 2, 13, 0, -1, -2147483648, 2147483647, 123456789)):
             environment[f"LP32_STRERROR_{index}"] = os.strerror(error)
         if TEST_GAME == "l4d2":

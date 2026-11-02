@@ -61,7 +61,7 @@ static __attribute__((noinline)) int compare_nested_stack_int(const void *a, con
     return compare_stack_int(a, b);
 }
 
-static __attribute__((noinline)) int check_deep_callback_stack(void)
+__attribute__((noinline)) int check_deep_callback_stack(void)
 {
     volatile unsigned char suspended[96 * 1024];
     for (unsigned i = 0; i < sizeof(suspended); ++i)
