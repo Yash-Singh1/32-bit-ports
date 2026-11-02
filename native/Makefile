@@ -393,3 +393,7 @@ clean:
 	rm -f $(BUILD_DIR)/mode32_probe $(BUILD_DIR)/game_loader $(BUILD_DIR)/controller_probe $(BUILD_DIR)/mkicon
 	rm -f $(BUILD_DIR)/converter-arm64 $(BUILD_DIR)/converter-x86_64 $(BUILD_DIR)/test_portal2_converter
 	rm -f $(BUILD_DIR)/l4d2_source $(BUILD_DIR)/test_l4d2_source $(BUILD_DIR)/test_game_profile
+
+.PHONY: test-callback-stack
+test-callback-stack: $(BUILD_DIR)/game_loader
+	env LP32_CALLBACK_STACK_ONLY=1 python3 tests/test_guest_dyld.py
