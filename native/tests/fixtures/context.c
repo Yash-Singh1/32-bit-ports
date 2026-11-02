@@ -7,6 +7,7 @@
 #include <stdarg.h>
 #include <wchar.h>
 #include <locale.h>
+#include <stdlib.h>
 
 extern uint64_t UpTime(void);
 extern uint64_t AbsoluteToNanoseconds(uint64_t);
@@ -35,8 +36,49 @@ static int format_wide(wchar_t *output, size_t size, const wchar_t *format, ...)
     return result;
 }
 
+/* A Source rendering frame can exceed the bridge's former 64 KiB
+   callback stride. Neither comparator entry may overwrite suspended locals. */
+static __attribute__((noinline)) int compare_stack_int(const void *a, const void *b)
+{
+    volatile uint32_t scratch[64];
+    for (unsigned i = 0; i < 64; ++i) scratch[i] = 0xabc00000u + i;
+    int result = (*(const int *)a > *(const int *)b) -
+                 (*(const int *)a < *(const int *)b);
+    for (unsigned i = 0; i < 64; ++i)
+        if (scratch[i] != 0xabc00000u + i) abort();
+    return result;
+}
+
+static __attribute__((noinline)) int compare_nested_stack_int(const void *a, const void *b)
+{
+    volatile uint32_t scratch[64];
+    for (unsigned i = 0; i < 64; ++i) scratch[i] = 0xdef00000u + i;
+    const int search[] = {1, 3, 9}, key = 3;
+    const int *found = bsearch(&key, search, 3, sizeof(int), compare_stack_int);
+    if (!found || *found != key) abort();
+    for (unsigned i = 0; i < 64; ++i)
+        if (scratch[i] != 0xdef00000u + i) abort();
+    return compare_stack_int(a, b);
+}
+
+static __attribute__((noinline)) int check_deep_callback_stack(void)
+{
+    volatile unsigned char suspended[96 * 1024];
+    for (unsigned i = 0; i < sizeof(suspended); ++i)
+        suspended[i] = (unsigned char)(i * 17u + 3u);
+    int values[] = {9, 1, 7, 3};
+    qsort(values, 4, sizeof(int), compare_nested_stack_int);
+    for (unsigned i = 0; i < sizeof(suspended); ++i)
+        if (suspended[i] != (unsigned char)(i * 17u + 3u)) return -234;
+    if (values[0] != 1 || values[1] != 3 || values[2] != 7 || values[3] != 9)
+        return -235;
+    return 0;
+}
+
 int check_context(void)
 {
+    int stack_error = check_deep_callback_stack();
+    if (stack_error) return stack_error;
     /* The guest must observe its own balanced cursor state even when the
        test process is not the foreground application. Nested users must not
        reveal each other's cursor, and unmatched shows must not underflow. */

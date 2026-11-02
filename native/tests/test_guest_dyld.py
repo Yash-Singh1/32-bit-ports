@@ -56,7 +56,7 @@ exports:
       _SetMovieGWorld, _SetMovieTimeValue, _StartMovie, _StopMovie, _UpdateMovie, _MoviesTask,
       _FindNextComponent, _OpenAComponent, _CloseComponent, _AudioUnitSetProperty, _AudioUnitGetProperty, _AudioUnitGetPropertyInfo,
       _AudioUnitInitialize, _AudioUnitUninitialize, _AudioUnitRender, _alcCaptureOpenDevice, _alcCaptureCloseDevice, _alcGetError,
-      _printf, _fflush, _malloc, _memcmp, _bsearch, _feof, _ferror, _fopen, _fopen$UNIX2003, _fclose,
+      _printf, _fflush, _malloc, _memcmp, _bsearch, _qsort, _abort, _feof, _ferror, _fopen, _fopen$UNIX2003, _fclose,
       _fread, _fgetc, _fseek, _clearerr, _strtof, _strtof$UNIX2003,
       ___stdoutp, __NSGetExecutablePath, _getcwd,
       _strcmp, _strncmp, _strcasecmp, _strrchr, ___toupper, ___tolower, _strncpy, _lp32_unavailable, _stat, _stat$INODE64, _open$UNIX2003, _open,
