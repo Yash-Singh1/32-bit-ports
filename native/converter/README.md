@@ -92,4 +92,4 @@ Mel output retain its saves and local settings. Targeted packaging regressions:
 make test-mel-source test-l4d2-source test-portal2-converter
 ```
 
-See [Mel notes](../../docs/PORTAL-STORIES-MEL.md) for build commands and validation.
+See [Mel notes](../MEL.md) for build commands and validation.

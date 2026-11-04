@@ -2,7 +2,7 @@
 """Extend a pre-Mel ABI table using local SDK 1.40/1.41 reference inputs.
 
 Usage: generate_mel_steam_abi.py SDK_DIRECTORY BASELINE_INC OUTPUT_INC
-See ../../docs/PORTAL-STORIES-MEL.md for provenance and reproduction.
+See ../MEL.md for provenance and reproduction.
 """
 from pathlib import Path
 import argparse

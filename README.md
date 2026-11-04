@@ -36,7 +36,7 @@ make -C native GAME=mel SOURCE_GAME="/path/to/Portal Stories Mel" bundle
 
 The converter accepts a complete original Mac game folder or app and creates a
 separate `PortalStoriesMel-Compat.app`. See
-[Mel setup and notes](docs/PORTAL-STORIES-MEL.md) for save handling and usage.
+[Mel setup and notes](native/MEL.md) for save handling and usage.
 
 ## Left 4 Dead 2
 
