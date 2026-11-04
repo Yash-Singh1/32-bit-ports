@@ -27,6 +27,8 @@ Supported and candidate games:
 
 ## Portal Stories: Mel
 
+Portal Stories: Mel support was implemented by [@bretislavstepan](https://github.com/bretislavstepan).
+
 Build the Mel converter
 with `make -C native mel-converter`, or assemble an app with:
 

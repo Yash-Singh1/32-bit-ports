@@ -1,5 +1,7 @@
 # Portal Stories: Mel
 
+Portal Stories: Mel support was implemented by [@bretislavstepan](https://github.com/bretislavstepan).
+
 Mel uses Steam AppID 317400, the `portal2_osx` launcher and the
 `portal_stories` game directory. Its converted app, saves and logs are separate
 from Portal 2.
