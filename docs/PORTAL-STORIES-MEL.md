@@ -40,9 +40,8 @@ cmp native/src/steam_abi.inc /tmp/mel-steam-abi.inc
 ```
 
 The regular generator alone does not yet append these legacy interfaces; use
-this extra step when regenerating the table. General SDK input acquisition and
-converter UI integration remain future work before a polished public release.
-The plist is a bundle template; this change does not add a Mel converter.
+this extra step when regenerating the table. SDK inputs are needed only to
+regenerate this table, not to build the loader or converter. No SDK files are required from the user.
 
 ## Validation and limits
 
@@ -88,6 +87,77 @@ and its i386 regression fixture, based on upstream `portal2`.
 bundle metadata and legacy Steam ABI support. No diagnostic instrumentation,
 local archive, SDK input files or private logs are included in either branch.
 
-For a separate Mel PR, merge the callback fix into upstream `portal2` first
-and then rebase this branch, or compare the Mel branch against the callback-fix
-branch while reviewing only the Mel-specific changes.
+The Mel branch can be submitted with the callback fix included; a separate
+upstream merge of the generic fix is not a prerequisite. The reproducer explains
+why Mel needs it, without claiming that other games or platforms reproduce it.
+
+## Building and converting
+
+Build the standalone converter from `native/`:
+
+```sh
+make mel-converter
+```
+
+Open `native/build/PortalStoriesMel-Converter.app`, drop the complete original
+Mac game folder onto it (or choose it), and select an output folder. For Steam,
+select `steamapps/common/Portal Stories Mel`. A Mac app containing the same game
+tree is also accepted. Separate depot downloads must first be assembled into
+one complete folder containing `portal2_osx`, `portal_stories/gameinfo.txt`, and
+the Mac `launcher.dylib`. Windows-only installations cannot be converted.
+
+The converter creates a separate `PortalStoriesMel-Compat.app`, using a numbered
+name if one already exists. It copies saves and settings from the selected
+source, never merges progress from another converted copy, and leaves the
+original game untouched. Keep the converted app that contains your progress.
+Runtime preparation uses the same verified Apple download and private cache as
+the other converters; the shipped converter needs no developer tools.
+
+For command-line builds:
+
+```sh
+cd native
+make GAME=mel SOURCE_GAME="/path/to/Portal Stories Mel" bundle
+make GAME=mel SOURCE_GAME="/path/to/Portal Stories Mel" run-game
+```
+
+The default source is the standard Steam installation under the user's Library.
+`SOURCE_APP` is also accepted. Rebuilding the same output replaces the game tree
+and retains its `portal_stories/SAVE` (or `save`) and local `config.cfg`,
+`video.txt`, and `videodefaults.txt`. `make GAME=mel promote-loader` updates only
+the loader in an existing output, including when the source disk is unavailable.
+
+## Packaging validation — 2026-11-04
+
+The native `all` target and universal Mel, Portal 2 and L4D2 converter builds
+passed. Targeted `test-mel-source`, `test-l4d2-source` and
+`test-portal2-converter` checks passed, covering source selection, output
+isolation, save/config retention, stale-library cleanup and numbered publishing.
+
+The shipped Mel converter converted the real Steam Mac installation twice on
+Intel macOS, with developer tools disabled in its environment and an existing
+runtime cache checked against the expected SHA-256 hashes. Both output signatures
+verified, each app had Mel's identity and original launcher bytes, and source
+metadata remained unchanged. The second conversion preserved the first output.
+A SIGTERM during a separate copy test cancelled conversion and removed staging.
+
+Rebuilding a converted real game through `make GAME=mel bundle` retained a
+private test save. `promote-loader` also retained it with an unavailable source.
+The converted bundle's `LP32_DYLD_SELFTEST=1` passed outside the command sandbox
+with Mel selected automatically and seven game/runtime modules loaded. The
+initial explicit-image test invocation needed a profile hint because Mel and
+Portal 2 share a launcher; normal bundle invocation supplies the correct hint.
+The sandboxed dependency check aborted; the same normal-bundle check passed
+outside that sandbox. No loader code was changed for these checks.
+
+Local output: `native/build/PortalStoriesMel-Converter.app`. A separate converted
+real-game app remains under `native/build/mel-real-verification/converted/`.
+Local logs and test scripts are under ignored `native/build/`; no game files,
+SDK inputs or runtime libraries are committed. Existing installed apps were
+preserved. A subsequent native GUI pass verified source-picker cancellation, source/output
+selection, Cancel during copying, retry after cancellation, progress and disabled
+controls, successful real-game conversion, and Show in Finder selecting the
+finished app. The GUI used an existing verified runtime cache. Drag-and-drop,
+Open Game, a new gameplay session, fresh runtime archive extraction and ARM
+execution were not tested in this packaging pass.
+Further campaign, controller and platform coverage are outside this task.

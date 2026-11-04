@@ -70,3 +70,30 @@ is sufficient. Multiple ambiguous versions produce an actionable error.
 Steam copies require the installed Steam client to be running and signed in.
 The bundled loader bridges Steam's i386 interfaces to that native client; see
 `../PORTAL2.md` for tested behavior and remaining interface limitations.
+
+## Portal Stories: Mel converter
+
+`make mel-converter` builds `build/PortalStoriesMel-Converter.app` using the
+same window and conversion engine, with Mel's own app identity and source picker.
+Choose a complete Mac game folder (`steamapps/common/Portal Stories Mel`) or a
+Mac app containing that tree. Separate depots must be assembled first.
+`L4D2Source.swift` contains the shared complete-tree helper used by both L4D2
+and Mel; their game directories, launcher names and retained settings are
+selected by separate profiles.
+
+The headless entry point is:
+
+```sh
+build/PortalStoriesMel-Converter.app/Contents/MacOS/PortalStoriesMelConverter \
+  --convert "/path/to/Portal Stories Mel" "/path/to/output folder"
+```
+
+`--cache` works as described above. Each conversion creates a separate numbered
+app and copies progress from the selected source. Make rebuilds of the same
+Mel output retain its saves and local settings. Targeted packaging regressions:
+
+```sh
+make test-mel-source test-l4d2-source test-portal2-converter
+```
+
+See [Mel notes](../../docs/PORTAL-STORIES-MEL.md) for build commands and validation.
