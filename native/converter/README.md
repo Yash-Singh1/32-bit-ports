@@ -73,13 +73,9 @@ The bundled loader bridges Steam's i386 interfaces to that native client; see
 
 ## Portal Stories: Mel converter
 
-`make mel-converter` builds `build/PortalStoriesMel-Converter.app` using the
-same window and conversion engine, with Mel's own app identity and source picker.
-Choose a complete Mac game folder (`steamapps/common/Portal Stories Mel`) or a
-Mac app containing that tree. Separate depots must be assembled first.
-`L4D2Source.swift` contains the shared complete-tree helper used by both L4D2
-and Mel; their game directories, launcher names and retained settings are
-selected by separate profiles.
+`make mel-converter` builds `build/PortalStoriesMel-Converter.app`. Choose a
+complete Mac game folder (`steamapps/common/Portal Stories Mel`) or a Mac app
+containing that tree. Assemble separate depots first.
 
 The headless entry point is:
 

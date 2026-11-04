@@ -27,7 +27,7 @@ Supported and candidate games:
 
 ## Portal Stories: Mel
 
-This branch adds Mel support and converter/build integration. Build the converter
+Build the Mel converter
 with `make -C native mel-converter`, or assemble an app with:
 
 ```sh
@@ -35,7 +35,7 @@ make -C native GAME=mel SOURCE_GAME="/path/to/Portal Stories Mel" bundle
 ```
 
 The converter accepts a complete original Mac game folder or app and creates a
-separate `PortalStoriesMel-Compat.app`. Builds and real-file packaging checks passed on Intel macOS. See
+separate `PortalStoriesMel-Compat.app`. See
 [Mel setup and notes](docs/PORTAL-STORIES-MEL.md) for save handling and usage.
 
 ## Left 4 Dead 2
