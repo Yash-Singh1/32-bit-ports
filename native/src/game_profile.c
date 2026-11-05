@@ -355,6 +355,20 @@ const struct lp32_game_profile *lp32_profile_named(const char *name)
     return NULL;
 }
 
+/* Converted image names carry the same identity as the bundle hint. Never
+   guess Portal 2 from the shared launcher fingerprint: that breaks Mel's
+   Steam identity. A renamed/raw launcher still needs LP32_GAME. */
+const struct lp32_game_profile *lp32_profile_image_hint(const char *path)
+{
+    if (!path) return NULL;
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    for (size_t i = 0; i < sizeof(known_profiles) / sizeof(known_profiles[0]); ++i) {
+        if (!strcmp(base, known_profiles[i]->image_file)) return known_profiles[i];
+    }
+    return NULL;
+}
+
 static uint32_t call_target(const struct macho_image32 *image, uint32_t site)
 {
     int32_t relative;

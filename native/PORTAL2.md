@@ -784,3 +784,8 @@ that its caller, `0xe3f1fe67` source, and 260-byte limit reach both stderr and
 the persistent log. A nested Steam callback regression verifies restoration,
 and direct guest faults verify that completed imports are not mislabeled as
 active. These checks run with `make -C native test-guest-dyld`.
+
+Direct loader invocation accepts the converted image name (`Portal2.image` or
+`PortalStoriesMel.image`) as an identity hint. For a raw or renamed launcher,
+set `LP32_GAME=portal2` or `LP32_GAME=PortalStoriesMel` explicitly: the two
+launchers share a fingerprint.

@@ -819,6 +819,7 @@ int main(int argc, char **argv)
     const struct lp32_game_profile *profile_hint = NULL;
     if (argc >= 2 && argv[1][0] != '-') {
         image_path = argv[1];
+        profile_hint = lp32_profile_image_hint(image_path);
     } else {
         image_path = default_image_path(argv[0], image_path_buffer,
                                         sizeof(image_path_buffer), &profile_hint);

@@ -8,7 +8,7 @@ from Portal 2.
 
 ## Build and convert
 
-From `native/`:
+Building from source requires Xcode command-line tools. From `native/`:
 
 ```sh
 make mel-converter
@@ -27,8 +27,8 @@ already exists. It copies the source's saves and settings. Progress from other
 converted apps is not merged; keep the app containing your progress.
 
 The first conversion downloads Apple's 4.72 GB Lion archive to extract two
-runtime libraries. Later conversions reuse the cache. The converter needs no
-developer tools. Open Steam and sign in before launching the converted game.
+runtime libraries. Later conversions reuse the cache. The built converter needs no
+developer tools to run. Open Steam and sign in before launching the converted game.
 
 For command-line builds:
 
@@ -106,3 +106,8 @@ make -C native test-guest-dyld test-source-steam-startup
 ```
 
 Full-campaign, controller and Apple Silicon gameplay coverage is not established.
+
+Direct loader invocation accepts the converted image name (`Portal2.image` or
+`PortalStoriesMel.image`) as an identity hint. For a raw or renamed launcher,
+set `LP32_GAME=portal2` or `LP32_GAME=PortalStoriesMel` explicitly: the two
+launchers share a fingerprint.
