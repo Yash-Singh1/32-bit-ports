@@ -165,7 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         let steamGame = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/Steam/steamapps/common/\(ConverterGame.name)")
+            .appendingPathComponent("Library/Application Support/Steam/steamapps/common/\(ConverterGame.steamFolder)")
         if FileManager.default.fileExists(atPath: steamGame.appendingPathComponent(ConverterGame.executable).path) {
             panel.directoryURL = steamGame
         }

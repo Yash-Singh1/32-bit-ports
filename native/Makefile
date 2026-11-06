@@ -1,7 +1,7 @@
 BUILD_DIR := build
 
 # One loader serves every supported title; the bundle targets pick the title
-# with GAME=pirates (default), GAME=clonewars, GAME=portal2 or GAME=l4d2.
+# with GAME=pirates (default), GAME=clonewars, GAME=portal2, GAME=mel or GAME=l4d2.
 GAME ?= pirates
 GUEST_RUNTIME_DIR ?= $(BUILD_DIR)/guest-runtime
 ifeq ($(GAME),clonewars)
@@ -36,6 +36,18 @@ ICON := $(SOURCE_CONTENTS)/Resources/game.icns
 ICON_NAME := game.icns
 SOURCE_TOOL := $(BUILD_DIR)/portal2_source
 SOURCE_DATA_DIRECTORY := Portal2
+else ifeq ($(GAME),mel)
+BUNDLE := $(BUILD_DIR)/PortalStoriesMel-Compat.app
+SOURCE_GAME ?= $(if $(strip $(SOURCE_APP)),$(SOURCE_APP),$(HOME)/Library/Application Support/Steam/steamapps/common/Portal Stories Mel)
+IMAGE_PREREQ :=
+IMAGE_NAME := PortalStoriesMel.image
+LOADER_NAME := PortalStoriesMelCompat
+INFO_PLIST := Info-PortalStoriesMel.plist
+GAME_DATA :=
+ICON := $(SOURCE_GAME)/portal_stories/resource/game.icns
+ICON_NAME := game.icns
+SOURCE_TOOL := $(BUILD_DIR)/mel_source
+SOURCE_DATA_DIRECTORY := PortalStoriesMel
 else ifeq ($(GAME),l4d2)
 BUNDLE := $(BUILD_DIR)/L4D2-Compat.app
 # SOURCE_APP remains an alias when it contains a complete Mac game tree.
@@ -66,7 +78,7 @@ GAME_DATA := GAME.DAT GAME0.DAT GAME1.DAT GAME2.DAT GAME3.DAT GAME4.DAT
 ICON := icons/LEGOPirates.icns
 ICON_NAME := icon.icns
 else
-$(error Unknown GAME "$(GAME)"; choose pirates, clonewars, portal2 or l4d2)
+$(error Unknown GAME "$(GAME)"; choose pirates, clonewars, portal2, mel or l4d2)
 endif
 # Python for the Pirates unpacker.  By default a venv under $(BUILD_DIR) with
 # `unicorn` installed is created on first use (system and Homebrew Pythons
@@ -172,6 +184,25 @@ l4d2-converter: $(BUILD_DIR)/l4d2-converter-arm64 $(BUILD_DIR)/l4d2-converter-x8
 	codesign --force --sign - "$(L4D2_CONVERTER_APP)"
 	codesign --verify --deep --strict "$(L4D2_CONVERTER_APP)"
 
+MEL_CONVERTER_SOURCES := $(CONVERTER_SOURCES) converter/L4D2Source.swift
+MEL_CONVERTER_APP := $(BUILD_DIR)/PortalStoriesMel-Converter.app
+
+$(BUILD_DIR)/mel-converter-arm64: $(MEL_CONVERTER_SOURCES) | $(BUILD_DIR)
+	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -D MEL_CONVERTER -target arm64-apple-macosx11.0 -sdk $(SDK) $^ -o $@
+
+$(BUILD_DIR)/mel-converter-x86_64: $(MEL_CONVERTER_SOURCES) | $(BUILD_DIR)
+	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -D MEL_CONVERTER -target x86_64-apple-macosx11.0 -sdk $(SDK) $^ -o $@
+
+.PHONY: mel-converter
+mel-converter: $(BUILD_DIR)/mel-converter-arm64 $(BUILD_DIR)/mel-converter-x86_64 $(BUILD_DIR)/game_loader converter/Info-Mel.plist Info-PortalStoriesMel.plist
+	mkdir -p "$(MEL_CONVERTER_APP)/Contents/MacOS" "$(MEL_CONVERTER_APP)/Contents/Resources"
+	lipo -create $(BUILD_DIR)/mel-converter-arm64 $(BUILD_DIR)/mel-converter-x86_64 -output "$(MEL_CONVERTER_APP)/Contents/MacOS/PortalStoriesMelConverter"
+	cp converter/Info-Mel.plist "$(MEL_CONVERTER_APP)/Contents/Info.plist"
+	cp $(BUILD_DIR)/game_loader Info-PortalStoriesMel.plist "$(MEL_CONVERTER_APP)/Contents/Resources/"
+	codesign --force --sign - "$(MEL_CONVERTER_APP)/Contents/Resources/game_loader"
+	codesign --force --sign - "$(MEL_CONVERTER_APP)"
+	codesign --verify --deep --strict "$(MEL_CONVERTER_APP)"
+
 $(BUILD_DIR)/test_portal2_converter: $(CONVERTER_CORE) tests/test_portal2_converter.swift | $(BUILD_DIR)
 	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -target $(shell uname -m)-apple-macosx11.0 -sdk $(SDK) $^ -o $@
 
@@ -199,6 +230,16 @@ test-portal2-loader: $(BUILD_DIR)/game_loader
 
 L4D2_SOURCE_CORE := $(CONVERTER_CORE) converter/L4D2Source.swift
 L4D2_EXECUTABLE ?= hl2_osx
+
+$(BUILD_DIR)/mel_source: $(L4D2_SOURCE_CORE) tools/mel_source.swift | $(BUILD_DIR)
+	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -target $(shell uname -m)-apple-macosx11.0 -sdk $(SDK) $^ -o $@
+
+$(BUILD_DIR)/test_mel_source: $(L4D2_SOURCE_CORE) tests/test_mel_source.swift | $(BUILD_DIR)
+	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -D MEL_CONVERTER -target $(shell uname -m)-apple-macosx11.0 -sdk $(SDK) $^ -o $@
+
+.PHONY: test-mel-source
+test-mel-source: $(BUILD_DIR)/test_mel_source $(BUILD_DIR)/mel_source
+	./$(BUILD_DIR)/test_mel_source
 
 $(BUILD_DIR)/l4d2_source: $(L4D2_SOURCE_CORE) tools/l4d2_source.swift | $(BUILD_DIR)
 	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -target $(shell uname -m)-apple-macosx11.0 -sdk $(SDK) $^ -o $@
@@ -313,7 +354,7 @@ mode-switch-stress: $(BUILD_DIR)/mode_switch_stress
 run: $(BUILD_DIR)/mode32_probe
 	arch -x86_64 ./$(BUILD_DIR)/mode32_probe
 
-ifneq ($(filter $(GAME),portal2 l4d2),)
+ifneq ($(filter $(GAME),portal2 l4d2 mel),)
 run-game: bundle
 	arch -x86_64 "$(BUNDLE)/Contents/MacOS/$(LOADER_NAME)"
 else
@@ -332,10 +373,10 @@ $(BUILD_DIR)/LEGOPirates.unpacked.macbin: tools/unpack_securom.py $(UNPACK_PYTHO
 	test -f "$(PACKED_IMAGE)" || { echo "missing $(PACKED_IMAGE); pass SOURCE_APP=/path/to/LEGOPirates.app" >&2; exit 1; }
 	$(UNPACK_PYTHON) tools/unpack_securom.py "$(PACKED_IMAGE)" "$@"
 
-ifneq ($(filter $(GAME),portal2 l4d2),)
+ifneq ($(filter $(GAME),portal2 l4d2 mel),)
 bundle: $(BUILD_DIR)/game_loader $(SOURCE_TOOL) $(INFO_PLIST) portal2-runtime
 	./$(SOURCE_TOOL) --copy "$(SOURCE_GAME)" "$(BUNDLE)"
-ifeq ($(GAME),l4d2)
+ifneq ($(filter $(GAME),l4d2 mel),)
 	./$(SOURCE_TOOL) --check-output "$(BUNDLE)"
 endif
 	mkdir -p "$(BUNDLE)/Contents/MacOS"
@@ -362,18 +403,18 @@ endif
 
 # Update only the compatibility runtime when the external source-data volume
 # is unavailable. The existing bundle's game data and resources are retained.
-ifeq ($(GAME),l4d2)
-promote-loader: $(BUILD_DIR)/l4d2_source
+ifneq ($(filter $(GAME),l4d2 mel),)
+promote-loader: $(SOURCE_TOOL)
 endif
 promote-loader: $(BUILD_DIR)/game_loader
-ifeq ($(GAME),l4d2)
+ifneq ($(filter $(GAME),l4d2 mel),)
 	./$(SOURCE_TOOL) --check-output "$(BUNDLE)"
 endif
 	test -d "$(BUNDLE)/Contents/MacOS"
 	cp $(BUILD_DIR)/game_loader "$(BUNDLE)/Contents/MacOS/$(LOADER_NAME).new"
 	mv "$(BUNDLE)/Contents/MacOS/$(LOADER_NAME).new" "$(BUNDLE)/Contents/MacOS/$(LOADER_NAME)"
 	if test -f "$(ICON)"; then cp "$(ICON)" "$(BUNDLE)/Contents/Resources/$(ICON_NAME)"; fi
-ifneq ($(filter $(GAME),portal2 l4d2),)
+ifneq ($(filter $(GAME),portal2 l4d2 mel),)
 	codesign --force --sign - "$(BUNDLE)"
 else
 	codesign --force --deep --sign - "$(BUNDLE)"
@@ -393,3 +434,8 @@ clean:
 	rm -f $(BUILD_DIR)/mode32_probe $(BUILD_DIR)/game_loader $(BUILD_DIR)/controller_probe $(BUILD_DIR)/mkicon
 	rm -f $(BUILD_DIR)/converter-arm64 $(BUILD_DIR)/converter-x86_64 $(BUILD_DIR)/test_portal2_converter
 	rm -f $(BUILD_DIR)/l4d2_source $(BUILD_DIR)/test_l4d2_source $(BUILD_DIR)/test_game_profile
+	rm -f $(BUILD_DIR)/mel_source $(BUILD_DIR)/test_mel_source $(BUILD_DIR)/mel-converter-arm64 $(BUILD_DIR)/mel-converter-x86_64
+
+.PHONY: test-callback-stack
+test-callback-stack: $(BUILD_DIR)/game_loader
+	env LP32_CALLBACK_STACK_ONLY=1 python3 tests/test_guest_dyld.py

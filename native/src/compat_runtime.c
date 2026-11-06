@@ -4850,6 +4850,9 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
     if (import_is(name, "_fopen")) {
         const char *path = (const char *)(uintptr_t)arguments[0];
         const char *mode = (const char *)(uintptr_t)arguments[1];
+        if (getenv("LP32_TRACE_FILES") && getenv("LP32_TRACE_FILES")[0] == '3') {
+            fprintf(stderr, "compat32: opening %s (%s)\n", path ? path : "(null)", mode ? mode : "");
+        }
         FILE *file = fopen(path, mode);
         if (!file && getenv("LP32_TRACE_FILES")) {
             fprintf(stderr, "compat32: fopen failed: %s (%s)\n",
@@ -5640,9 +5643,38 @@ uint32_t compat_runtime32_call(uint32_t function, const uint32_t *arguments,
         last_call_trapped = 1;
         return 0;
     }
-    uintptr_t stack_top = kGuestStackBase + kGuestStackSize -
-                          guest_thread_slot * kGuestStackPerThread -
-                          guest_call_depth * stack_slice_size;
+    uintptr_t thread_top = kGuestStackBase + kGuestStackSize -
+                           guest_thread_slot * kGuestStackPerThread;
+    uintptr_t thread_bottom = thread_top - kGuestStackPerThread;
+    uintptr_t stack_top = thread_top - guest_call_depth * stack_slice_size;
+    if (guest_call_depth) {
+        struct compat_runtime32_import_context context = {0};
+        if (compat_runtime32_current_import(&context)) {
+            uintptr_t suspended = (uintptr_t)context.arguments;
+            /* A fixed 64 KiB stride can land INSIDE a deeper suspended
+               guest frame. The import gateway's id and return address are
+               eight bytes below arguments; leave a further safety margin
+               and place all callback frames below the live guest stack. */
+            if (suspended >= thread_bottom && suspended < thread_top) {
+                const uintptr_t margin = 256;
+                if (suspended < thread_bottom + margin) {
+                    fputs("compat32: guest callback stack exhausted\n", stderr);
+                    last_call_trapped = 1;
+                    return 0;
+                }
+                uintptr_t available_top = (suspended - margin) & ~(uintptr_t)15;
+                if (available_top < stack_top) stack_top = available_top;
+            }
+        }
+    }
+    /* Do not underflow into another thread's stack when a deep caller
+       leaves too little space for a callback and its entry arguments. */
+    if (stack_top < thread_bottom + 4096 + 2 * sizeof(uint32_t) ||
+        argument_count > (stack_top - thread_bottom - 4096) / sizeof(uint32_t) - 2) {
+        fputs("compat32: guest callback stack exhausted\n", stderr);
+        last_call_trapped = 1;
+        return 0;
+    }
     /* Entry goes through the i386 landing trampoline, whose `ret` pops the
        function address; the function then sees esp = sp + 4, which must be
        12 mod 16 as after a call. */

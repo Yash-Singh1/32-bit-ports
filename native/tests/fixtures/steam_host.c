@@ -6,6 +6,10 @@
 #include <stdio.h>
 struct object { void **vtable; };
 static void *client17_table[37];
+static void *parental_table[6];
+static struct object parental = {parental_table};
+static void *http_table[25];
+static struct object http = {http_table};
 static void *client_table[42], *user_table[32], *utils_table[38], *stats_table[45];
 static void *storage_table[59];
 static struct object client17 = {client17_table};
@@ -44,33 +48,42 @@ static bool rate(void *self, const char *name, float count, double seconds) {
 }
 static unsigned callback_count, frames;
 static void set_check(void *self, bool (*check)(int)) {
-    if (self != &client || !check) abort();
+    if ((self != &client && self != &client17) || !check) abort();
     (void)check(1040044);
-    if (getenv("LP32_FIXTURE_NESTED_IMPORT_CRASH"))
+    if (self == &client && getenv("LP32_FIXTURE_NESTED_IMPORT_CRASH"))
         (void)*(volatile unsigned char *)(uintptr_t)1;
 }
 static void run_frame(void *self) { if (self != &client17) abort(); ++frames; }
 static unsigned ipc_count(void *self) { if (self != &client17) abort(); return frames; }
+static bool parental_enabled(void *self) { if (self != &parental) abort(); return true; }
+static uint64_t subscribed_files(void *self, unsigned start) { if (self != &storage || start != 0) abort(); return UINT64_C(0x123456789abcdef0); }
+static unsigned http_request(void *self, int method, const char *url) {
+    if (self != &http || method != 1 || strcmp(url, "https://fixture.invalid")) abort();
+    return 0x1234abcd;
+}
 static void *get_interface(void *self, int u, int p, const char *version) {
-    if (self != &client || u != 17 || p != 23) abort();
-    if (!strcmp(version, "SteamUser021")) return &user;
-    if (!strcmp(version, "SteamUtils010")) return &utils;
+    if ((self != &client && self != &client17) || u != 17 || p != 23) abort();
+    if (!strcmp(version, "SteamUser021") || !strcmp(version, "SteamUser019")) return &user;
+    if (!strcmp(version, "SteamUtils010") || !strcmp(version, "SteamUtils009")) return &utils;
+    if (!strcmp(version, "STEAMHTTP_INTERFACE_VERSION002")) return &http;
+    if (!strcmp(version, "STEAMPARENTALSETTINGS_INTERFACE_VERSION001")) return &parental;
     if (!strcmp(version, "STEAMUSERSTATS_INTERFACE_VERSION012")) return &stats;
-    if (!strcmp(version, "STEAMREMOTESTORAGE_INTERFACE_VERSION016")) return &storage;
+    if (!strcmp(version, "STEAMREMOTESTORAGE_INTERFACE_VERSION016") || !strcmp(version, "STEAMREMOTESTORAGE_INTERFACE_VERSION014")) return &storage;
     return 0;
 }
 void *CreateInterface(const char *version, int *result) {
     if (!ugc_name) ugc_name = strdup("workshop/fixture-chamber.bsp");
     callback_count = 0;
     if (!strcmp(version, "SteamClient017")) {
-        frames = 0; client17_table[19] = run_frame; client17_table[20] = ipc_count;
+        frames = 0; client17_table[36] = get_interface; parental_table[0] = parental_enabled; client17_table[23] = get_interface; client17_table[33] = set_check;
+        http_table[0] = http_request; client17_table[19] = run_frame; client17_table[20] = ipc_count;
         if (result) *result = 0;
         return &client17;
     }
     if (result) *result = strcmp(version, "SteamClient020") != 0;
     client_table[34] = set_check; client_table[12] = get_interface; user_table[2] = steam_id;
     utils_table[4] = country; utils_table[9] = app_id; stats_table[5] = rate;
-    storage_table[26] = ugc_details;
+    storage_table[26] = ugc_details; storage_table[43] = subscribed_files;
     return !strcmp(version, "SteamClient020") ? &client : 0;
 }
 struct callback { int user, id; void *data; int size; };

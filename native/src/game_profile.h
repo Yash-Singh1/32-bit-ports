@@ -188,6 +188,8 @@ int lp32_profile_select(const struct macho_image32 *image);
 int lp32_profile_select_hint(const struct macho_image32 *image,
                              const struct lp32_game_profile *hint);
 int lp32_profile_is_source(void);
+/* Exact converted image basename; selection still validates its fingerprint. */
+const struct lp32_game_profile *lp32_profile_image_hint(const char *path);
 
 /* Always non-NULL after lp32_profile_select; before that a neutral profile
    with no patches is returned. */

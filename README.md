@@ -21,9 +21,25 @@ Supported and candidate games:
 | LEGO Batman 3: Beyond Gotham | Feral, 2014 | - |
 | The LEGO Movie Videogame | Feral, 2014 | - |
 | Portal 2 | Valve, 2011 | Experimental: main menu and first level render; gameplay checks ongoing |
+| Portal Stories: Mel | Prism Studios, 2015 | Playable on Intel: two extended gameplay sessions without crashes; Apple Silicon unverified |
 | Left 4 Dead 2 | Valve, 2010 | Experimental: loader, bundle and movie playback; gameplay checks ongoing |
 
 \* Not verified with a 100% run yet, report any bugs or problems in the issues tab.
+
+## Portal Stories: Mel
+
+Portal Stories: Mel support was implemented by [@bretislavstepan](https://github.com/bretislavstepan).
+
+Build the Mel converter
+with `make -C native mel-converter`, or assemble an app with:
+
+```sh
+make -C native GAME=mel SOURCE_GAME="/path/to/Portal Stories Mel" bundle
+```
+
+The converter accepts a complete original Mac game folder or app and creates a
+separate `PortalStoriesMel-Compat.app`. See
+[Mel setup and notes](native/MEL.md) for save handling and usage.
 
 ## Left 4 Dead 2
 

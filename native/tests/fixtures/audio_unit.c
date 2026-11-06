@@ -1,5 +1,6 @@
 #include <AudioToolbox/AudioToolbox.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 /* The deprecated Component Manager typedefs are absent from modern i386 SDK
@@ -33,8 +34,13 @@ int check_audio_unit(void)
         kAudioUnitSubType_AUConverter, kAudioUnitManufacturer_Apple, 0, 0};
     void *component = FindNextComponent(NULL, &desc);
     struct { AudioUnit unit; uint32_t guard; } out = {0, 0x87654321};
-    if (!component || OpenAComponent(component, &out.unit) || !out.unit ||
-        out.guard != 0x87654321) return -261;
+    OSStatus open_status = component ? OpenAComponent(component, &out.unit) : -1;
+    if (!component || open_status || !out.unit || out.guard != 0x87654321) {
+        printf("audio-unit fixture: component=%p open_status=%d unit=%p guard=0x%08x\n",
+                component, (int)open_status, out.unit, (unsigned)out.guard);
+        fflush(NULL);
+        return -261;
+    }
     AudioStreamBasicDescription format = {44100, kAudioFormatLinearPCM,
         kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked, 4, 1, 4, 2, 16, 0};
     if (AudioUnitSetProperty(out.unit, kAudioUnitProperty_StreamFormat,

@@ -2,21 +2,33 @@ import Foundation
 import CryptoKit
 import Darwin
 
-// The two converter apps share the same engine and window. The build target
+// The converter apps share the same engine and window. The build target
 // selects the game; the Portal 2 app keeps its existing layouts and identity.
 #if L4D2_CONVERTER
 typealias ConverterSource = L4D2Source
 enum ConverterGame {
     static let name = "Left 4 Dead 2"
+    static let steamFolder = "Left 4 Dead 2"
     static let stem = "L4D2"
     static let executable = "hl2_osx"
     static let sourceDetail = "A complete Mac app or Steam game folder.\nFor Steam, choose Left 4 Dead 2 inside steamapps/common."
     static let pickerMessage = "Choose the complete Left 4 Dead 2 Mac game folder inside steamapps/common, or a Mac app containing it. Separate depots must be assembled first."
 }
+#elseif MEL_CONVERTER
+typealias ConverterSource = MelSource
+enum ConverterGame {
+    static let name = "Portal Stories: Mel"
+    static let steamFolder = "Portal Stories Mel"
+    static let stem = "PortalStoriesMel"
+    static let executable = "portal2_osx"
+    static let sourceDetail = "A complete Mac app or Steam game folder.\nFor Steam, choose Portal Stories Mel inside steamapps/common."
+    static let pickerMessage = "Choose the complete Portal Stories Mel Mac game folder inside steamapps/common, or a Mac app containing it. Separate depots must be assembled first."
+}
 #else
 typealias ConverterSource = Portal2Source
 enum ConverterGame {
     static let name = "Portal 2"
+    static let steamFolder = "Portal 2"
     static let stem = "Portal2"
     static let executable = "portal2_osx"
     static let sourceDetail = "A Mac app, Steam game folder, or downloaded depots.\nFor Steam, choose the Portal 2 folder inside steamapps/common."
@@ -309,7 +321,7 @@ final class Converter {
         }
         progress("Copying \(ConverterGame.name)…", "Copying the game files and settings into your new app.")
         try layout.copyGame(to: output.appendingPathComponent("SharedSupport/\(ConverterGame.stem)"), check: cancellation.check)
-        #if L4D2_CONVERTER
+        #if L4D2_CONVERTER || MEL_CONVERTER
         if let icon = layout.icon {
             try Data(contentsOf: icon).write(to: output.appendingPathComponent("Resources/game.icns"))
         }
@@ -322,7 +334,7 @@ final class Converter {
         }
         #endif
         try cancellation.check()
-        #if L4D2_CONVERTER
+        #if L4D2_CONVERTER || MEL_CONVERTER
         try Data(contentsOf: image).write(to: output.appendingPathComponent("SharedSupport/\(ConverterGame.stem).image"))
         #else
         try fm.copyItem(at: image, to: output.appendingPathComponent("SharedSupport/\(ConverterGame.stem).image"))
