@@ -105,6 +105,11 @@ make -C native test-mel-source test-l4d2-source test-portal2-converter
 make -C native test-guest-dyld test-source-steam-startup
 ```
 
+On Apple Silicon, the optional legacy microphone input is rejected before
+initialization to avoid a Core Audio allocator crash under Rosetta. Game audio
+playback remains enabled. Intel microphone behavior is unchanged. Developers
+can set `LP32_ENABLE_MEL_MICROPHONE=1` to retest the native capture path.
+
 Full-campaign, controller and Apple Silicon gameplay coverage is not established.
 
 Direct loader invocation accepts the converted image name (`Portal2.image` or

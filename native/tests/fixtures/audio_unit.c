@@ -25,6 +25,27 @@ static OSStatus input(void *refcon, AudioUnitRenderActionFlags *flags,
     return noErr;
 }
 
+/* Enable a HAL input without starting capture. On Mel/Rosetta the bridge
+   must reject initialization before native microphone buffers are allocated. */
+int check_mel_microphone_guard(void)
+{
+    AudioComponentDescription desc = {kAudioUnitType_Output,
+        kAudioUnitSubType_HALOutput, kAudioUnitManufacturer_Apple, 0, 0};
+    void *component = FindNextComponent(NULL, &desc);
+    AudioUnit unit = NULL;
+    if (!component || OpenAComponent(component, &unit)) return -290;
+    UInt32 enabled = 1, disabled = 0;
+    OSStatus status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO,
+        kAudioUnitScope_Output, 0, &disabled, sizeof(disabled));
+    if (!status) status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO,
+        kAudioUnitScope_Input, 1, &enabled, sizeof(enabled));
+    if (status) { CloseComponent(unit); return -291; }
+    status = AudioUnitInitialize(unit);
+    if (!status) AudioUnitUninitialize(unit);
+    OSStatus closed = CloseComponent(unit);
+    return status == kAudioUnitErr_FailedInitialization && !closed ? 0 : -292;
+}
+
 int check_audio_unit(void)
 {
     if (alcCaptureOpenDevice(NULL, 0, 0, 0) || alcGetError(NULL) != 0xa004 ||

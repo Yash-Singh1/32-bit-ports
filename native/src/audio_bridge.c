@@ -10,6 +10,7 @@
 #include <CoreAudio/CoreAudio.h>
 
 #include <pthread.h>
+#include <sys/sysctl.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -142,6 +143,22 @@ static bool trace_audio_latency(void)
     static int enabled = -1;
     if (enabled < 0) enabled = getenv("LP32_TRACE_AUDIO_LATENCY") != NULL;
     return enabled != 0;
+}
+
+/* Mel can trap in Core Audio while initializing its optional microphone
+   under Rosetta. Report capture unavailable before entering native init;
+   playback queues and Intel microphone support keep their normal paths. */
+static bool unavailable_mel_microphone(AudioUnit unit)
+{
+    if (lp32_profile()->steam_app_id != 317400 ||
+        getenv("LP32_ENABLE_MEL_MICROPHONE")) return false;
+    int translated = 0;
+    size_t size = sizeof(translated);
+    if (sysctlbyname("sysctl.proc_translated", &translated, &size, NULL, 0) ||
+        !translated) return false;
+    UInt32 input_enabled = 0, input_size = sizeof(input_enabled);
+    return AudioUnitGetProperty(unit, kAudioOutputUnitProperty_EnableIO,
+        kAudioUnitScope_Input, 1, &input_enabled, &input_size) == noErr && input_enabled;
 }
 
 static bool mute_audio_output(void)
@@ -1708,7 +1725,12 @@ int audio_bridge32_dispatch(const char *import_name, const uint32_t *arguments,
         AudioUnit unit = synchronized_unit_for_guest(arguments[0]);
         OSStatus status = kAudio_ParamError;
         if (unit) {
-            if (LP32_NAME_IS(import_name, import_length, "_AudioUnitInitialize")) status = AudioUnitInitialize(unit);
+            if (LP32_NAME_IS(import_name, import_length, "_AudioUnitInitialize")) {
+                if (unavailable_mel_microphone(unit)) {
+                    fprintf(stderr, "compat32: Mel microphone initialization is unavailable under Rosetta; audio playback remains enabled\n");
+                    status = kAudioUnitErr_FailedInitialization;
+                } else status = AudioUnitInitialize(unit);
+            }
             else if (LP32_NAME_IS(import_name, import_length, "_AudioUnitUninitialize")) status = AudioUnitUninitialize(unit);
             else if (LP32_NAME_IS(import_name, import_length, "_AudioOutputUnitStart")) status = AudioOutputUnitStart(unit);
             else status = AudioOutputUnitStop(unit);

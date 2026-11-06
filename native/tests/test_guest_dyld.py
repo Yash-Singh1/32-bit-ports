@@ -157,6 +157,7 @@ extern int check_libc_io_float(void);
 extern int check_dispatch_strings(void);
 extern int _NSGetExecutablePath(char *, uint32_t *);
 extern int check_audio_unit(void);
+extern int check_mel_microphone_guard(void);
 extern int check_sound_manager(void);
 extern int check_time_manager(void);
 extern int MPCreateCriticalRegion(void **);
@@ -186,6 +187,12 @@ __attribute__((constructor)) static void initialize(void) {
     ++count;
 }
 int LauncherMain(void) {
+    if (getenv("LP32_FIXTURE_MEL_MICROPHONE_GUARD_ONLY")) {
+        int error = check_mel_microphone_guard();
+        if (!error) error = check_audio_unit();
+        if (!error) error = check_audio_threads();
+        return error ? error : 26;
+    }
     if (getenv("LP32_CALLBACK_STACK_ONLY")) {
         int error = check_deep_callback_stack();
         return error ? error : 26;
@@ -629,6 +636,14 @@ int check_directory(void) {
             assert "active import _lp32_steam_method_34 caller=0x" in crashed.stderr, crashed.stderr
             assert "active import _getenv " not in crashed.stderr, crashed.stderr
             print("Nested import crash context: PASS (enclosing Steam call restored after callback)")
+            if os.uname().machine == "arm64":
+                microphone_env = dict(environment, LP32_GAME="PortalStoriesMel",
+                    LP32_FIXTURE_MEL_MICROPHONE_GUARD_ONLY="1")
+                microphone_env.pop("LP32_ENABLE_MEL_MICROPHONE", None)
+                guarded = run("arch", "-x86_64", str(LOADER), str(image),
+                    env=microphone_env, capture_output=True, text=True)
+                assert "Mel microphone initialization is unavailable under Rosetta" in guarded.stderr, guarded.stderr
+                print("Mel microphone guard: PASS (capture rejected before initialization; AudioUnit and AudioQueue playback remain available)")
         run("arch", "-x86_64", str(LOADER), str(image), env=environment)
         # Re-run the same real i386 code under the newer Mac depot layout.
         # The launcher's explicit bin/ paths must find libraries in osx32 too.
