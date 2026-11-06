@@ -30,6 +30,12 @@ Supported and candidate games:
 
 Portal Stories: Mel support was implemented by [@bretislavstepan](https://github.com/bretislavstepan).
 
+Download [Portal Stories: Mel Converter 0.0.0-dev.1](https://github.com/Yash-Singh1/32-bit-ports/releases/tag/mel-converter-v0.0.0-dev.1),
+unzip it, and open **PortalStoriesMel-Converter.app**. Choose the complete original
+Mac game folder and an output folder. macOS 11 or later, Steam, and Rosetta 2 on
+Apple Silicon are required. This development build is ad hoc signed and is not
+notarized.
+
 Build the Mel converter
 with `make -C native mel-converter`, or assemble an app with:
 
