@@ -32,7 +32,9 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/sysctl.h>
 
+extern int lp32_native_segments;
 extern uint32_t run_compat32(uint32_t eip, uint32_t esp, uint16_t cs32);
 extern void stress_gateway_plain(void);
 extern void stress_gateway_guarded(void);
@@ -145,11 +147,15 @@ static void emit_gateway_pad(uint8_t *p, uint64_t target64, uint32_t retry,
 static void emit_return_pad(uint8_t *p, uint32_t retry, uint16_t cs64)
 {
     static const uint8_t return64[] = {
-        0x4c, 0x87, 0xf4, 0x48, 0x83, 0xc4, 0x18, 0x41, 0x5f, 0x41, 0x5e,
+        0x4c, 0x87, 0xf4,
+        /* Only native Intel needs selector restoration. */
+        0x83, 0x7c, 0x24, 0x0c, 0x00, 0x74, 0x0e,
+        0x66, 0x8b, 0x4c, 0x24, 0x08, 0x8e, 0xd9,
+        0x66, 0x8b, 0x4c, 0x24, 0x0a, 0x8e, 0xc1, 0x48, 0x83, 0xc4, 0x18, 0x41, 0x5f, 0x41, 0x5e,
         0x41, 0x5d, 0x41, 0x5c, 0x5b, 0x5d, 0xc3,
     };
     if (guarded) {
-        p = emit(p, (uint8_t[]){0x31, 0xc9, 0x41, 0xff, 0xc1, 0x85, 0xc9, 0x75, 0x12}, 9);
+        p = emit(p, (uint8_t[]){0x31, 0xc9, 0x41, 0xff, 0xc1, 0x85, 0xc9, 0x75, sizeof(return64)}, 9);
     }
     p = emit(p, return64, sizeof(return64));
     if (guarded) emit_recovery32(p, retry ? kWrongTo64 : kFailed, retry, cs64);
@@ -252,6 +258,10 @@ static void *churner(void *arg)
 
 int main(int argc, char **argv)
 {
+    int translated = 0;
+    size_t translated_size = sizeof(translated);
+    sysctlbyname("sysctl.proc_translated", &translated, &translated_size, NULL, 0);
+    lp32_native_segments = !translated;
     for (int i = 1; i < argc; ++i) {
         if (!strncmp(argv[i], "guarded=", 8)) guarded = atoi(argv[i] + 8);
         else if (!strncmp(argv[i], "threads=", 8)) threads = atoi(argv[i] + 8);

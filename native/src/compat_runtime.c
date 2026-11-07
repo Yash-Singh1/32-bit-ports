@@ -50,6 +50,7 @@
 #include <wchar.h>
 #include <uuid/uuid.h>
 
+extern int lp32_native_segments;
 extern uint32_t run_compat32(uint32_t eip, uint32_t esp, uint16_t cs32);
 extern void lp32_import_gateway(void);
 extern const uint8_t lp32_context_start[], lp32_context_end[];
@@ -1023,6 +1024,10 @@ static void emit_return64_pad(uint8_t *destination, uint32_t retry,
 {
     static const uint8_t return64[] = {
         0x4c, 0x87, 0xf4,
+        /* Only native Intel needs selector restoration. */
+        0x83, 0x7c, 0x24, 0x0c, 0x00, 0x74, 0x0e,
+        0x66, 0x8b, 0x4c, 0x24, 0x08, 0x8e, 0xd9,
+        0x66, 0x8b, 0x4c, 0x24, 0x0a, 0x8e, 0xc1,
         0x48, 0x83, 0xc4, 0x18,
         0x41, 0x5f,
         0x41, 0x5e,
@@ -1032,11 +1037,13 @@ static void emit_return64_pad(uint8_t *destination, uint32_t retry,
         0x5d,
         0xc3,
     };
+    _Static_assert(9 + sizeof(return64) + 13 <= 0x40,
+                   "mode probe, return and recovery must fit the host pad");
     uint8_t *p = destination;
     if (!mode_guards_disabled) {
         /* xorl %ecx,%ecx; inc-ecx-twice-or-inc-r9d; testl %ecx,%ecx; jnz */
         static const uint8_t probe[] = {0x31, 0xc9, 0x41, 0xff, 0xc1,
-                                        0x85, 0xc9, 0x75, 0x12};
+                                        0x85, 0xc9, 0x75, sizeof(return64)};
         p = emit_bytes(p, probe, sizeof(probe));
     }
     p = emit_bytes(p, return64, sizeof(return64));
@@ -2962,10 +2969,12 @@ const struct macho_image32 *compat_runtime32_image(void)
 
 int compat_runtime32_initialize(struct macho_image32 *image)
 {
-    if (!process_is_translated()) {
-        errno = ENOTSUP;
-        return runtime_error("x86_64 host is not running through Rosetta");
-    }
+    lp32_native_segments = !process_is_translated();
+    /* Both native Intel and Rosetta execute the x86_64 host. Segment
+       allocation below is the capability check for entering i386 code;
+       absence of Rosetta is not an unsupported CPU. */
+    fprintf(stderr, "compat32: x86_64 host execution=%s\n",
+            process_is_translated() ? "rosetta" : "native-intel");
     /* TFU has almost 60 MiB of image data, including BSS. Keep allocations
        above it; the smaller titles retain their original 32 MiB heap base. */
     uintptr_t image_end = ((uintptr_t)image->max_address + 0xffff) & ~(uintptr_t)0xffff;
@@ -3075,11 +3084,12 @@ static uint64_t dispatch_import_chained(uint32_t import_id, const char *name,
    objc_msgSend_stret result pointer. The older LEGO callers clean it up. */
 uint32_t *lp32_adjust_import_stack(uint32_t *stack)
 {
-    const char *name = import_name_for_id(stack[0]);
-    if (lp32_profile()->title == LP32_TITLE_PORTAL2 &&
-        (!strcmp(name, "_objc_msgSend_stret") || !strcmp(name, "_CGDisplayBounds"))) {
-        stack[2] = stack[1];
-        return stack + 1;
+    if (lp32_profile()->title == LP32_TITLE_PORTAL2) {
+        const char *name = import_name_for_id(stack[0]);
+        if (!strcmp(name, "_objc_msgSend_stret") || !strcmp(name, "_CGDisplayBounds")) {
+            stack[2] = stack[1];
+            return stack + 1;
+        }
     }
     return stack;
 }

@@ -1,3 +1,7 @@
+.data
+.globl _lp32_native_segments
+_lp32_native_segments:
+    .long 0
 .text
 .p2align 4, 0x90
 .globl _run_compat32
@@ -19,6 +23,19 @@ _run_compat32:
     subq $24, %rsp
     movl %edi, (%rsp)
     movl %edx, 4(%rsp)
+    /* Native Intel checks DS/ES in compatibility mode. A 64-bit thread
+       may enter with null data selectors, which Rosetta tolerates. Preserve
+       the host selectors in the unused part of the transition frame. */
+    movl _lp32_native_segments(%rip), %ecx
+    movl %ecx, 12(%rsp)
+    testl %ecx, %ecx
+    jz 9f
+    movw %ds, 8(%rsp)
+    movw %es, 10(%rsp)
+    movw %ss, %cx
+    movw %cx, %ds
+    movw %cx, %es
+9:
     movl %esi, %r14d
     xchgq %r14, %rsp
     ljmp *(%r14)

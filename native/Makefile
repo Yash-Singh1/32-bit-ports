@@ -241,7 +241,7 @@ test-arb-program-guard: $(BUILD_DIR)/test_arb_program_guard
 test-arb-sampler-usage: $(BUILD_DIR)/test_arb_sampler_usage
 	./$(BUILD_DIR)/test_arb_sampler_usage
 
-$(BUILD_DIR)/mode_switch_stress: tests/mode_switch_stress.c tests/mode_switch_stress_asm.S | $(BUILD_DIR)
+$(BUILD_DIR)/mode_switch_stress: tests/mode_switch_stress.c tests/mode_switch_stress_asm.S src/mode32_switch.S | $(BUILD_DIR)
 	$(CLANG) $(CFLAGS) -Wl,-no_pie,-pagezero_size,0x1000 $^ -o $@
 	codesign --force --sign - $@
 

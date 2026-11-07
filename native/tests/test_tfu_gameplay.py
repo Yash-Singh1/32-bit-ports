@@ -31,6 +31,13 @@ prefs.update(RegistrationRequestDate=datetime.datetime(3999, 9, 4), PrefsDialogA
              GameDisplayID=cg.CGMainDisplayID(), GameDisplayMode=0,
              GameDisplayWidth=1280, GameDisplayHeight=800, GameDisplayDepth=32,
              GameDisplayFrequency=0, IsKBAndMouse="FALSE", LowDetail="0")
+# The Steam build opens Aspyr's Game Guide launcher first; skip it through
+# this test's preference domain, as test_tfu_continue.py does.
+guide = BUNDLE / "Contents/Resources/GameGuideInfo.plist"
+if guide.exists():
+    guide_key = plistlib.loads(guide.read_bytes()).get("PreferenceDoNotShowKey")
+    if guide_key:
+        prefs[guide_key] = True
 loader = Path(os.environ.get("LP32_TEST_LOADER", str(BUNDLE / "Contents/MacOS/TFUCompat")))
 process = None
 

@@ -33,6 +33,41 @@ Apple libraries. The first conversion downloads Apple's 4.72 GB Lion archive,
 verifies its SHA-256, and extracts two i386 C++ libraries into a private cache.
 Later conversions reuse the verified libraries. Nothing is installed systemwide.
 
+Native Intel execution was tested on a MacBookPro14,2 with macOS 12.7.6,
+a Core i5-7267U and Iris Plus Graphics 650. The Steam Mac 1.3.0 bundle ran
+from a FAT32 USB drive, completed the checkpoint cinematic and reached
+Felucia's Mushroom Ascent with a rendered gameplay HUD. The test captured
+the framebuffer and closed the game, using a private save and preferences.
+This verifies one checkpoint, not the whole campaign or every Intel GPU.
+At 1024x768 with high detail and Apple's OpenGL, a later foreground comparison
+averaged 29.0 FPS before the dispatch changes and 29.7 FPS afterward over about
+two minutes at the same checkpoint. The updated run's 240-frame intervals
+ranged from 29.3 to 29.9 FPS. The earlier short observation included startup
+stalls and did not represent sustained foreground play. macOS also varied its
+CPU speed limit during testing, so these runs do not isolate the code changes'
+effect on FPS. Performance at lower settings has not been tested.
+
+Frequent viewport, depth-range and vertex-array calls now use cached ABI
+adapters instead of repeatedly searching the general bridge chain. TFU also
+skips a return-stack import-name lookup needed only by Portal 2. Across two
+five-second samples per build, the general `objc_bridge32_dispatch` path
+appeared in 11.7% of main-thread samples before and 2.1% afterward; this measures
+that dispatch path, not total CPU usage. Rendering checks pass on native Intel
+and Rosetta. The continue test records frame times
+without timing every import by default; set `LP32_FRAME_STATS=1` when that
+more intrusive profiling is needed. First launch can still spend several
+minutes in macOS's security scan, followed by shader compilation during loading.
+
+Native support requires initializing the guest's DS/ES selectors and keeping
+the low-address reservation mapped until guest segments replace it. Both
+fixes are included. The mode-switch probe, all 1,249 TFU initializers and
+the OpenGL pixel test passed on this Intel Mac; the 12-thread stress test
+completed over 913 million mode-switch round trips in 30 seconds without failures.
+The corresponding Rosetta checks also passed. On another Intel Mac,
+`make -C native run` checks i386 entry and return before testing the app.
+Steam is optional on both hosts; its absence disables only the runtime's
+Steam process/playtime tracking.
+
 Conversion creates a separate app and leaves the original installation and
 existing converted copies untouched. Before metadata cleanup and signing, the
 converter gives the owner read/write access to copied files and access to copied

@@ -1,7 +1,7 @@
 # 32-bit Mac games on modern macOS
 
-A native loader that runs original 32-bit Intel Mac games on
-current macOS (Apple Silicon through Rosetta 2, or Intel). It maps the
+A native loader for original 32-bit Intel Mac games on current macOS,
+with native Intel execution and Rosetta 2 on Apple Silicon. It maps the
 game's i386 executable into a 64-bit process, switches into a 32-bit code
 segment to run it, and bridges the OS, OpenGL, Cg, CoreAudio and controller
 interfaces the game expects. No SIP changes, kernel extensions, VMs or Wine.

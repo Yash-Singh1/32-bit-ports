@@ -12,6 +12,7 @@
 #include <sys/sysctl.h>
 #include <unistd.h>
 
+extern int lp32_native_segments;
 extern uint32_t run_compat32(uint32_t eip, uint32_t esp, uint16_t cs32);
 
 enum {
@@ -34,9 +35,13 @@ static void fatal_errno(const char *what)
 
 static void crash_handler(int sig, siginfo_t *info, void *context)
 {
-    (void)context;
+    const ucontext_t *uc = context;
     fprintf(stderr, "mode32_probe: signal %d at %p while crossing execution modes\n",
             sig, info->si_addr);
+    fprintf(stderr, "rip=%llx rsp=%llx cs=%llx r14=%llx trap=%u error=%u\n",
+            uc->uc_mcontext->__ss.__rip, uc->uc_mcontext->__ss.__rsp,
+            uc->uc_mcontext->__ss.__cs, uc->uc_mcontext->__ss.__r14,
+            uc->uc_mcontext->__es.__trapno, uc->uc_mcontext->__es.__err);
     _exit(128 + sig);
 }
 
@@ -110,17 +115,15 @@ int main(void)
 {
     install_crash_handlers();
 
-    uint16_t cs64 = 0;
+    uint16_t cs64 = 0, ds_before, es_before;
+    __asm__ volatile("movw %%ds, %0; movw %%es, %1" : "=r"(ds_before), "=r"(es_before));
     __asm__ volatile("movw %%cs, %0" : "=r"(cs64));
 
     const bool translated = process_is_translated();
+    lp32_native_segments = !translated;
     printf("host: arch=x86_64 translated=%s cs64=0x%04x\n",
            translated ? "yes" : "no", cs64);
-    if (!translated) {
-        fprintf(stderr, "mode32_probe: run this x86_64 executable through Rosetta\n");
-        return EXIT_FAILURE;
-    }
-
+    /* Test the actual segment/mode-switch capability on either host. */
     int ldt_index = allocate_cs32();
     uint16_t cs32 = (uint16_t)((ldt_index << 3) | 7);
     printf("ldt: index=%d cs32=0x%04x\n", ldt_index, cs32);
@@ -132,18 +135,26 @@ int main(void)
     uint32_t return_stub = (uint32_t)(uintptr_t)(code + kReturnStubOffset);
     uint32_t far64_address = (uint32_t)(uintptr_t)(code + kFar64Offset);
 
-    /* 32-bit code: mov $0x12345678,%eax; ljmp *far64_address; ud2 */
+    /* Exercise SS stack accesses, an ES string store and a DS load before
+       returning through the far pointer. Native Intel validates all three. */
     const uint8_t guest_template[] = {
         0xb8, 0x78, 0x56, 0x34, 0x12,
+        0x50, 0x31, 0xc0, 0x58, /* push eax; xor eax,eax; pop eax */
+        0x89, 0xe7, 0xab,       /* mov esp,edi; stosd */
+        0x31, 0xc0, 0x8b, 0x47, 0xfc, /* xor eax,eax; mov -4(edi),eax */
         0xff, 0x2d, 0, 0, 0, 0,
         0x0f, 0x0b,
     };
     memcpy(code, guest_template, sizeof(guest_template));
-    memcpy(code + 7, &far64_address, sizeof(far64_address));
+    memcpy(code + 19, &far64_address, sizeof(far64_address));
 
     /* Restore the complete host ABI frame established by run_compat32. */
     const uint8_t return_template[] = {
         0x4c, 0x87, 0xf4,
+        /* Only native Intel needs selector restoration. */
+        0x83, 0x7c, 0x24, 0x0c, 0x00, 0x74, 0x0e,
+        0x66, 0x8b, 0x4c, 0x24, 0x08, 0x8e, 0xd9,
+        0x66, 0x8b, 0x4c, 0x24, 0x0a, 0x8e, 0xc1,
         0x48, 0x83, 0xc4, 0x18,
         0x41, 0x5f,
         0x41, 0x5e,
@@ -171,6 +182,12 @@ int main(void)
     fflush(stdout);
 
     uint32_t result = run_compat32(guest_eip, guest_esp, cs32);
+    uint16_t ds_after, es_after;
+    __asm__ volatile("movw %%ds, %0; movw %%es, %1" : "=r"(ds_after), "=r"(es_after));
+    if (ds_before != ds_after || es_before != es_after) {
+        fprintf(stderr, "mode32_probe: host DS/ES were not preserved\n");
+        return EXIT_FAILURE;
+    }
     printf("result: 0x%08" PRIx32 " (%s)\n", result,
            result == UINT32_C(0x12345678) ? "PASS" : "FAIL");
 

@@ -58,11 +58,24 @@ _lp32_import_gateway:
     movzwl _lp32_cs32(%rip), %ecx
     movl %ecx, 4(%rsp)
     leal 4(%r14), %r14d
+    cmpl $0, _lp32_native_segments(%rip)
+    je 9f
+    movw %ss, %cx
+    movw %cx, %ds
+    movw %cx, %es
+9:
     xchgq %r14, %rsp
     ljmp *(%r14)
 
 1:
     /* Controlled escape: unwind run_compat32's host-side stack frame. */
+    cmpl $0, 12(%rsp)
+    je 8f
+    movw 8(%rsp), %cx
+    movw %cx, %ds
+    movw 10(%rsp), %cx
+    movw %cx, %es
+8:
     addq $24, %rsp
     popq %r15
     popq %r14

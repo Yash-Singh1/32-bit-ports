@@ -90,10 +90,12 @@ def main():
     steam_target.write_bytes(original_save)
     (case / "save.sha256").write_text(hashlib.sha256(original_save).hexdigest() + "\n")
     loader = os.environ.get("LP32_TEST_LOADER", str(NATIVE / "build/game_loader"))
+    # Per-import profiling adds clock reads to every guest/host transition.
+    # Measure frame times by default; LP32_FRAME_STATS=1 still opts into it.
     env = dict(os.environ, LP32_BACKGROUND_TEST="1", LP32_MUTE_AUDIO="1",
                LP32_TFU_PREFERENCES_ID=domain, LP32_TFU_USER_DATA_ROOT=str(case / "user-data"),
                LP32_TFU_TEST_PAD_FILE=str(case / "pad"), LP32_TRACE_MOVIES="1",
-               LP32_DIAGNOSTIC_LOG=str(case / "diagnostic.log"), LP32_FRAME_STATS="1",
+               LP32_DIAGNOSTIC_LOG=str(case / "diagnostic.log"), LP32_PORTAL_FRAME_STATS="1",
                LP32_SLOW_IMPORT_MS="100",
                LP32_TRACE_BUFFER_CACHE="1", LP32_AGL_CAPTURE_FRAME=str(case / "frame.ppm"),
                LP32_AGL_CAPTURE_EVERY="120")

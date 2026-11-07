@@ -6027,6 +6027,53 @@ FAST_GL(glDisable)
     return 0;
 }
 
+/* TFU repeats these fixed-function state calls for each draw. Resolve their
+   ABI adapters once, as for the shader and buffer fast imports, rather than
+   walking the general bridge chain on every call. */
+FAST_GL(glViewport)
+{
+    (void)return_address;
+    if (trace_gl_render_call()) {
+        fprintf(stderr, "compat32: glViewport swap=%llu value={%d,%d,%d,%d}\n",
+                (unsigned long long)objc_bridge_swap_count,
+                (GLint)arguments[0], (GLint)arguments[1],
+                (GLsizei)arguments[2], (GLsizei)arguments[3]);
+    }
+    glViewport(arguments[0], arguments[1], arguments[2], arguments[3]);
+    return 0;
+}
+
+FAST_GL(glDepthRange)
+{
+    (void)return_address;
+    GLdouble values[2];
+    memcpy(values, arguments, sizeof(values));
+    glDepthRange(values[0], values[1]);
+    return 0;
+}
+
+FAST_GL(glEnableClientState)
+{
+    (void)return_address;
+    glEnableClientState(arguments[0]);
+    return 0;
+}
+
+FAST_GL(glDisableClientState)
+{
+    (void)return_address;
+    glDisableClientState(arguments[0]);
+    return 0;
+}
+
+FAST_GL(glVertexPointer)
+{
+    (void)return_address;
+    glVertexPointer(arguments[0], arguments[1], arguments[2],
+                    (const void *)(uintptr_t)arguments[3]);
+    return 0;
+}
+
 FAST_GL(glBindTexture)
 {
     (void)return_address;
@@ -6160,6 +6207,11 @@ lp32_fast_import_fn objc_bridge32_fast_import(const char *import_name)
         {"glBlendFuncSeparateEXT", fast_glBlendFuncSeparate},
         {"_glEnable", fast_glEnable},
         {"_glDisable", fast_glDisable},
+        {"_glViewport", fast_glViewport},
+        {"_glDepthRange", fast_glDepthRange},
+        {"_glEnableClientState", fast_glEnableClientState},
+        {"_glDisableClientState", fast_glDisableClientState},
+        {"_glVertexPointer", fast_glVertexPointer},
         {"_glBindTexture", fast_glBindTexture},
         {"_glTexParameteri", fast_glTexParameteri},
         {"_glTexEnvf", fast_glTexEnvf},
@@ -7793,15 +7845,7 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         *result = fast_glTexParameteri(arguments, 0); return 1;
     }
     if (LP32_NAME_IS(import_name, import_length, "_glViewport")) {
-        if (trace_gl_render_call()) {
-            fprintf(stderr,
-                    "compat32: glViewport swap=%llu value={%d,%d,%d,%d}\n",
-                    (unsigned long long)objc_bridge_swap_count,
-                    (GLint)arguments[0], (GLint)arguments[1],
-                    (GLsizei)arguments[2], (GLsizei)arguments[3]);
-        }
-        glViewport(arguments[0], arguments[1], arguments[2], arguments[3]);
-        *result = 0; return 1;
+        *result = fast_glViewport(arguments, 0); return 1;
     }
     /* Fixed-function immediate mode used by the Clone Wars Feral layer for
        its loading/letterbox quads. */
@@ -9139,10 +9183,28 @@ static int test_mapped_buffer_draw_order(void)
     int status = -1;
     if (glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT) != GL_FRAMEBUFFER_COMPLETE_EXT)
         goto done;
-    glViewport(0, 0, 16, 4);
+    lp32_fast_import_fn viewport = objc_bridge32_fast_import("_glViewport");
+    lp32_fast_import_fn depth_range = objc_bridge32_fast_import("glDepthRange");
+    lp32_fast_import_fn enable_array = objc_bridge32_fast_import("_glEnableClientState");
+    lp32_fast_import_fn disable_array = objc_bridge32_fast_import("glDisableClientState");
+    lp32_fast_import_fn vertex_pointer = objc_bridge32_fast_import("_glVertexPointer");
+    if (!viewport || !depth_range || !enable_array || !disable_array || !vertex_pointer)
+        goto done;
+    viewport((const uint32_t[]){0, 0, 16, 4}, 0);
+    GLdouble depths[2] = {.25, .75}, actual_depths[2];
+    uint32_t depth_arguments[4];
+    memcpy(depth_arguments, depths, sizeof(depth_arguments));
+    depth_range(depth_arguments, 0);
+    glGetDoublev(GL_DEPTH_RANGE, actual_depths);
+    if (actual_depths[0] != depths[0] || actual_depths[1] != depths[1]) goto done;
+    glDepthRange(0, 1);
     glDisable(GL_DITHER);
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glVertexPointer(2, GL_FLOAT, 0, NULL);
+    enable_array((const uint32_t[]){GL_VERTEX_ARRAY}, 0);
+    vertex_pointer((const uint32_t[]){2, GL_FLOAT, 8, 8}, 0);
+    void *actual_pointer = NULL;
+    glGetPointerv(GL_VERTEX_ARRAY_POINTER, &actual_pointer);
+    if ((uintptr_t)actual_pointer != 8 || !glIsEnabled(GL_VERTEX_ARRAY)) goto done;
+    vertex_pointer((const uint32_t[]){2, GL_FLOAT, 0, 0}, 0);
     static const unsigned char colors[4][4] = {
         {255, 0, 0, 255}, {0, 255, 0, 255},
         {0, 0, 255, 255}, {255, 255, 255, 255},
@@ -9188,7 +9250,8 @@ static int test_mapped_buffer_draw_order(void)
             }
         }
     }
-    status = glGetError() == GL_NO_ERROR ? 0 : -1;
+    disable_array((const uint32_t[]){GL_VERTEX_ARRAY}, 0);
+    status = !glIsEnabled(GL_VERTEX_ARRAY) && glGetError() == GL_NO_ERROR ? 0 : -1;
 done:
     glDisableClientState(GL_VERTEX_ARRAY);
     glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
@@ -9201,6 +9264,10 @@ static int test_buffer_gpu_write(void)
 {
     GLuint buffer = bound_buffer_for_target(GL_ARRAY_BUFFER);
     uint64_t result;
+    /* The queued-draw test leaves unsynchronized modification enabled.
+       This test checks shadow invalidation after a GPU write, so restore
+       normal buffer synchronization before reading that write on the CPU. */
+    glBufferParameteriAPPLE(GL_ARRAY_BUFFER, GL_BUFFER_SERIALIZED_MODIFY_APPLE, GL_TRUE);
     test_buffer_data(GL_ARRAY_BUFFER, 16, NULL, GL_DYNAMIC_DRAW);
     objc_bridge32_dispatch("glMapBuffer", (const uint32_t[]){GL_ARRAY_BUFFER, GL_READ_ONLY}, &result);
     if (!result) return -1;
@@ -9216,12 +9283,16 @@ static int test_buffer_gpu_write(void)
     fast_glBindBuffer((const uint32_t[]){GL_PIXEL_PACK_BUFFER, 0}, 0);
     objc_bridge32_dispatch("glMapBuffer", (const uint32_t[]){GL_ARRAY_BUFFER, GL_READ_ONLY}, &result);
     const unsigned char expected[] = {255, 0, 255, 255};
-    int status = !result || memcmp((const void *)(uintptr_t)result, expected, 4) ? -1 : 0;
+    unsigned char actual[4] = {0};
+    if (result) memcpy(actual, (const void *)(uintptr_t)result, sizeof(actual));
+    int status = !result || memcmp(actual, expected, 4) ? -1 : 0;
     objc_bridge32_dispatch("glUnmapBuffer", (const uint32_t[]){GL_ARRAY_BUFFER}, &result);
     glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
     glDeleteFramebuffersEXT(1, &fbo); glDeleteTextures(1, &texture);
-    if (glGetError() != GL_NO_ERROR) status = -1;
-    if (status) fputs("gl-buffer-selftest: stale CPU copy after pixel-pack GPU write\n", stderr);
+    GLenum error = glGetError();
+    if (error != GL_NO_ERROR) status = -1;
+    if (status) fprintf(stderr, "gl-buffer-selftest: pixel-pack GPU write: pixel=%u,%u,%u,%u error=%04x\n",
+                        actual[0], actual[1], actual[2], actual[3], error);
     return status;
 }
 
