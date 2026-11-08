@@ -309,6 +309,24 @@ static const struct lp32_game_profile l4d2_profile = {
     .source_game_directory = "left4dead2",
 };
 
+/* L4D1 Mac launcher shares the L4D2 fingerprint; bundle identity disambiguates. */
+static const struct lp32_game_profile l4d1_profile = {
+    .title = LP32_TITLE_L4D1,
+    .name = "L4D1",
+    .display_name = "Left 4 Dead",
+    .log_directory = "L4D1Compat",
+    .image_file = "L4D1.image",
+    .entry_eip = 0x00001d90,
+    .image_end = 0x00004000,
+    .main_address = 0x00001e00,
+    .thread_argument_is_direct = 1,
+    .callee_pops_struct_return = 1,
+    .steam_app_id = 500,
+    .source_data_directory = "L4D1",
+    .source_executable = "hl2_osx",
+    .source_game_directory = "left4dead",
+};
+
 static const struct lp32_game_profile unknown_profile = {
     .title = LP32_TITLE_UNKNOWN,
     .name = "unknown",
@@ -323,6 +341,7 @@ static const struct lp32_game_profile *const known_profiles[] = {
     &portal2_profile,
     &portal_stories_mel_profile,
     &l4d2_profile,
+    &l4d1_profile,
 };
 
 static const struct lp32_game_profile *current_profile = &unknown_profile;
@@ -335,7 +354,8 @@ const struct lp32_game_profile *lp32_profile(void)
 int lp32_profile_is_source(void)
 {
     return current_profile->title == LP32_TITLE_PORTAL2 ||
-           current_profile->title == LP32_TITLE_L4D2;
+           current_profile->title == LP32_TITLE_L4D2 ||
+           current_profile->title == LP32_TITLE_L4D1;
 }
 
 const struct lp32_game_profile *lp32_profile_named(const char *name)
@@ -348,6 +368,7 @@ const struct lp32_game_profile *lp32_profile_named(const char *name)
     }
     /* Accept the friendlier spellings used on the command line. */
     if (strcasecmp(name, "pirates") == 0) return &pirates_profile;
+    if (strcasecmp(name, "left4dead") == 0) return &l4d1_profile;
     if (strcasecmp(name, "left4dead2") == 0) return &l4d2_profile;
     if (strcasecmp(name, "clonewars") == 0 || strcasecmp(name, "lsw3") == 0) {
         return &clone_wars_profile;

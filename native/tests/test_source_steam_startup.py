@@ -55,7 +55,8 @@ void SteamAPI_Shutdown(void) {
                                 env=environment, capture_output=True, text=True, timeout=15)
         return result, result.stdout + result.stderr
 
-    for profile, app_id, title in (("L4D2", "550", "Left 4 Dead 2"),
+    for profile, app_id, title in (("L4D1", "500", "Left 4 Dead"),
+                                   ("L4D2", "550", "Left 4 Dead 2"),
                                    ("Portal2", "620", "Portal 2")):
         result, output = run(["--prepare-steam", str(root), profile], app_id)
         assert result.returncode == 0, output

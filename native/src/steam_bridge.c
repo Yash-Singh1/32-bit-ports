@@ -14,6 +14,23 @@
 struct steam_method { const char *name; char result; const char *args; };
 struct steam_interface { const char *version; unsigned first, count; };
 #include "steam_abi.inc"
+/* SteamClient009 has no callback-check hook. Observe the guest API's own
+   registration calls, then forward them to the original i386 implementation. */
+static _Atomic uint32_t legacy_register, legacy_unregister;
+static struct { uint32_t object; int id; } legacy_callbacks[8192];
+uint32_t steam_bridge32_wrap_export(const char *name, uint32_t address)
+{
+    if (!address || lp32_profile()->title != LP32_TITLE_L4D1) return address;
+    if (!strcmp(name, "_SteamAPI_RegisterCallback")) {
+        legacy_register = address;
+        return compat_runtime32_guest_callback("_lp32_steam_register_guest_callback");
+    }
+    if (!strcmp(name, "_SteamAPI_UnregisterCallback")) {
+        legacy_unregister = address;
+        return compat_runtime32_guest_callback("_lp32_steam_unregister_guest_callback");
+    }
+    return address;
+}
 static void *client_library;
 struct steam_proxy { uint32_t guest; void *host; const struct steam_interface *interface; };
 static struct steam_proxy proxies[128];
@@ -644,6 +661,27 @@ static void trace_callback(int pipe, const struct native_callback *cb)
 static _Thread_local struct { int pipe; uint32_t data; size_t capacity; } callback_buffers[16];
 int steam_bridge32_dispatch(const char *name, const uint32_t *args, uint64_t *result)
 {
+    if (!strcmp(name, "_lp32_steam_register_guest_callback") ||
+        !strcmp(name, "_lp32_steam_unregister_guest_callback")) {
+        bool registering = !strcmp(name, "_lp32_steam_register_guest_callback");
+        uint32_t original = registering ? legacy_register : legacy_unregister;
+        if (!original) return 0;
+        pthread_mutex_lock(&cache_lock);
+        unsigned slot = 8192, empty = 8192;
+        for (unsigned i = 0; i < 8192; ++i) {
+            if (legacy_callbacks[i].object == args[0]) { slot = i; break; }
+            if (!legacy_callbacks[i].object && empty == 8192) empty = i;
+        }
+        if (registering) {
+            if (slot == 8192) slot = empty;
+            if (slot == 8192 || !args[0]) { pthread_mutex_unlock(&cache_lock); return 0; }
+            legacy_callbacks[slot].object = args[0];
+            legacy_callbacks[slot].id = (int)args[1];
+        } else if (slot != 8192) legacy_callbacks[slot].object = 0;
+        pthread_mutex_unlock(&cache_lock);
+        *result = compat_runtime32_call(original, args, registering ? 2 : 1);
+        return 1;
+    }
     if (strncmp(name, "_lp32_steam_", 12) || !client_library) return 0;
     name += 12;
     if (!strncmp(name, "method_", 7)) return call_method((unsigned)strtoul(name + 7, NULL, 10), args, result);
@@ -668,7 +706,16 @@ int steam_bridge32_dispatch(const char *name, const uint32_t *args, uint64_t *re
             if (!ok || plain_callback(cb.id)) break;
             // The modern client queues private callbacks absent from the old
             // SDK. Only discard ones no guest has registered to receive.
-            if (!callback_check_hook || native_callback_check(cb.id)) {
+            bool registered = !callback_check_hook;
+            if (callback_check_hook) registered = native_callback_check(cb.id);
+            else if (legacy_register) {
+                registered = false;
+                pthread_mutex_lock(&cache_lock);
+                for (unsigned i = 0; i < 8192; ++i)
+                    if (legacy_callbacks[i].object && legacy_callbacks[i].id == cb.id) { registered = true; break; }
+                pthread_mutex_unlock(&cache_lock);
+            }
+            if (registered) {
                 fprintf(stderr, "compat32: unsupported registered Steam callback layout %d\n", cb.id);
                 return 0;
             }

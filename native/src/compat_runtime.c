@@ -3660,7 +3660,7 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
 {
     if (probe_module_bridges) {
         uint64_t network_result;
-        if (lp32_profile()->title == LP32_TITLE_L4D2 &&
+        if ((lp32_profile()->title == LP32_TITLE_L4D2 || lp32_profile()->title == LP32_TITLE_L4D1) &&
             (quicktime_support32_dispatch(name, arguments, &network_result) ||
              quicktime_bridge32_dispatch(name, arguments, &network_result))) return network_result;
         if (steam_bridge32_dispatch(name, arguments, &network_result)) return network_result;
@@ -3714,6 +3714,13 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
     if (import_is(name, "_NSAddressOfSymbol")) return arguments[0];
     if (import_is(name, "_NSModuleForSymbol")) return guest_dyld32_symbol_module(arguments[0]);
     if (import_is(name, "_NSLibraryNameForModule")) return guest_dyld32_module_name(arguments[0]);
+    if (import_is(name, "_NSUnLinkModule") && lp32_profile_is_source()) {
+        /* RESET_LAZY_REFERENCES and KEEP_MEMORY_MAPPED are the published
+           options. Guest modules stay pinned, as they do for dlclose, so
+           callback/import addresses remain valid until process teardown. */
+        if (arguments[1] & ~UINT32_C(3)) return 0;
+        return guest_dyld32_close(arguments[0]) == 0;
+    }
     if (import_is(name, "_uuid_generate")) { uuid_generate((void *)(uintptr_t)arguments[0]); return 0; }
     if (import_is(name, "_malloc_size")) {
         uint32_t mapped_size = guest_memory32_size(arguments[0]);
@@ -3869,6 +3876,10 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
             stat((const char *)(uintptr_t)arguments[0], &host);
         if (!result) copy_stat64_32((void *)(uintptr_t)arguments[1], &host);
         return (uint32_t)result;
+    }
+    if (import_is(name, "_lockf")) {
+        int64_t length = (int64_t)((uint64_t)arguments[2] | (uint64_t)arguments[3] << 32);
+        return (uint32_t)lockf((int)arguments[0], (int)arguments[1], length);
     }
     if (import_is(name, "_lseek")) {
         int64_t offset = (int64_t)((uint64_t)arguments[1] | (uint64_t)arguments[2] << 32);
@@ -4079,6 +4090,7 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
     if (import_is(name, "_getpid")) return (uint32_t)getpid();
     if (import_is(name, "_getuid")) return (uint32_t)getuid();
     if (import_is(name, "_geteuid")) return (uint32_t)geteuid();
+    if (import_is(name, "_issetugid")) return (uint32_t)issetugid();
     if (import_is(name, "_getgid")) return (uint32_t)getgid();
     if (import_is(name, "_getegid")) return (uint32_t)getegid();
     if (import_is(name, "_getpagesize")) return (uint32_t)getpagesize();
@@ -5043,6 +5055,10 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
         return arguments[0] <= UCHAR_MAX ?
             (uint32_t)tolower((unsigned char)arguments[0]) : arguments[0];
     }
+    if (import_is(name, "_random")) return (uint32_t)random();
+    if (import_is(name, "_srandom")) { srandom(arguments[0]); return 0; }
+    if (import_is(name, "_srandomdev")) { srandomdev(); return 0; }
+    if (import_is(name, "_arc4random")) return arc4random();
     if (import_is(name, "_rand")) {
         /* Darwin exposes RAND_MAX == INT_MAX.  A 15-bit ANSI/Windows-style
            result makes the game's rejection samplers impossible to satisfy. */
@@ -5080,6 +5096,21 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
         }
         return guest_thread_errno_address;
     }
+    /* Miles uses an empty Carbon event mask as a one-tick cooperative yield.
+       Leave requests for actual Carbon events to the normal unsupported path. */
+    if (import_is(name, "_WaitNextEvent") && arguments[0] == 0 && arguments[3] == 0) {
+        struct timespec delay = {arguments[2] / 60, (long)(arguments[2] % 60) * 1000000000L / 60};
+        while (nanosleep(&delay, &delay) && errno == EINTR) {}
+        if (arguments[1]) {
+            unsigned char record[16] = {0};
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            uint32_t ticks = (uint32_t)((uint64_t)now.tv_sec * 60 + now.tv_nsec * 60 / 1000000000);
+            memcpy(record + 6, &ticks, sizeof(ticks));
+            memcpy((void *)(uintptr_t)arguments[1], record, sizeof(record));
+        }
+        return 0;
+    }
     if (import_is(name, "_UpTime")) return mach_absolute_time();
     if (import_is(name, "_AbsoluteToNanoseconds") || import_is(name, "_NanosecondsToAbsolute")) {
         mach_timebase_info_data_t timebase;
@@ -5089,6 +5120,17 @@ static uint64_t dispatch_named_import_body(uint32_t import_id, const char *name,
             (uint64_t)((__uint128_t)value * timebase.numer / timebase.denom) :
             (uint64_t)((__uint128_t)value * timebase.denom / timebase.numer);
     }
+    if (import_is(name, "_task_info")) {
+        /* These Mach records are packed to four bytes on both Intel ABIs.
+           Other flavors can contain native-sized addresses and need conversion. */
+        if (arguments[1] != TASK_BASIC_INFO_32 && arguments[1] != TASK_BASIC_INFO_64 &&
+            arguments[1] != TASK_EVENTS_INFO && arguments[1] != TASK_THREAD_TIMES_INFO)
+            return KERN_INVALID_ARGUMENT;
+        return (uint32_t)task_info(arguments[0], arguments[1],
+            (task_info_t)(uintptr_t)arguments[2], (mach_msg_type_number_t *)(uintptr_t)arguments[3]);
+    }
+    if (import_is(name, "_mach_thread_self")) return mach_thread_self();
+    if (import_is(name, "_mach_host_self")) return mach_host_self();
     if (import_is(name, "_mach_port_allocate")) {
         return (uint32_t)mach_port_allocate(arguments[0], arguments[1], (mach_port_t *)(uintptr_t)arguments[2]);
     }

@@ -3,6 +3,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <stdint.h>
+#include <stdlib.h>
 typedef void *FixtureStyle;
 typedef void *FixtureLayout;
 extern uint32_t ATSFontFindFromName(CFStringRef, uint32_t);
@@ -16,8 +17,20 @@ extern int ATSUDrawText(FixtureLayout, uint32_t, uint32_t, int32_t, int32_t);
 extern int ATSUDisposeTextLayout(FixtureLayout);
 extern int ATSUDisposeStyle(FixtureStyle);
 
+extern int32_t FSPathMakeRef(const uint8_t *, void *, uint8_t *);
+extern int32_t ATSFontActivateFromFileReference(const void *, uint32_t, uint32_t, void *, uint32_t, uint32_t *);
 int check_font(void)
 {
+    if (getenv("LP32_FIXTURE_QUICKTIME")) {
+        uint32_t ref[20];
+        struct { uint32_t before, container, after; } output = {0x11223344, 0, 0xaabbccdd};
+        if (FSPathMakeRef((const uint8_t *)"/System/Library/Fonts/Helvetica.ttc", ref, 0) ||
+            ATSFontActivateFromFileReference(ref, 2, 0, 0, 0, &output.container) ||
+            !output.container || output.before != 0x11223344 || output.after != 0xaabbccdd)
+            return -56;
+        ref[0] = 0;
+        if (!ATSFontActivateFromFileReference(ref, 2, 0, 0, 0, 0)) return -57;
+    }
     CFStringRef unicode = CFStringCreateWithCString(0, "A\xc3\xa9", kCFStringEncodingUTF8);
     uint16_t characters[2] = {0};
     struct { CFIndex used; uint32_t guard; } converted = {0, 0x12345678};

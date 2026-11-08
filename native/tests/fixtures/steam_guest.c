@@ -4,6 +4,9 @@
 #include <dlfcn.h>
 #include <string.h>
 #define METHOD(obj, slot, type) ((type)((*(void ***)(obj))[slot]))
+static unsigned guest_registrations, guest_unregistrations;
+void SteamAPI_RegisterCallback(void *object, int id) { (void)object; (void)id; ++guest_registrations; }
+void SteamAPI_UnregisterCallback(void *object) { (void)object; ++guest_unregistrations; }
 static int checked_callback;
 static bool registered_callback(int callback) {
     (void)getenv("LP32_STEAM_FIXTURE"); // Nested guest import inside a native callback.
@@ -11,6 +14,10 @@ static bool registered_callback(int callback) {
     return false;
 }
 int check_steam(void) {
+    guest_registrations = guest_unregistrations = 0;
+    /* A nested native callback must not reuse this live guest stack range. */
+    volatile unsigned char deep_stack[96 * 1024];
+    for (unsigned i = 0; i < sizeof(deep_stack); ++i) deep_stack[i] = (unsigned char)(i * 7 + 3);
     const char *number = "0x123456789abcdef0!";
     struct { char *end; uint32_t guard; } parsed = {0, 0xaabbccdd};
     if (strtoull(number, &parsed.end, 0) != UINT64_C(0x123456789abcdef0) ||
@@ -94,6 +101,37 @@ int check_steam(void) {
     void *old_storage = get(client, 17, 23, "STEAMREMOTESTORAGE_INTERFACE_VERSION014");
     typedef uint64_t (*subscribed_fn)(void *, unsigned);
     if (!old_storage || METHOD(old_storage, 43, subscribed_fn)(old_storage, 0) != UINT64_C(0x123456789abcdef0)) return -97;
+    void *old_client = create("SteamClient009", &status);
+    if (!old_client || status) return -93;
+    METHOD(old_client, 19, frame_fn)(old_client);
+    if (METHOD(old_client, 20, app_fn)(old_client) != 1) return -94;
+    /* The legacy facade has no callback-check hook. Skip the known modern
+       private notification, but still deliver public Steam callbacks. */
+    if (getenv("LP32_GAME") && !strcmp(getenv("LP32_GAME"), "l4d1")) {
+        void *friends = create("SteamFriends005", &status);
+        struct friend_info { uint64_t game; uint32_t ip; uint16_t port, query; uint64_t lobby; };
+        struct { uint32_t before; struct friend_info info; uint32_t after; } friend_result = {0x11223344, {0}, 0xaabbccdd};
+        typedef bool (*friend_fn)(void *, uint64_t, struct friend_info *);
+        if (!friends || status || !METHOD(friends, 9, friend_fn)(friends, UINT64_C(0x123456789abcdef0), &friend_result.info) ||
+            friend_result.before != 0x11223344 || friend_result.after != 0xaabbccdd ||
+            friend_result.info.game != UINT64_C(0x1122334455667788) || friend_result.info.port != 27015 ||
+            friend_result.info.lobby != UINT64_C(0xfedcba9876543210)) return -101;
+        int object = 0;
+        void (*reg)(void *, int) = dlsym(RTLD_DEFAULT, "SteamAPI_RegisterCallback");
+        void (*unreg)(void *) = dlsym(RTLD_DEFAULT, "SteamAPI_UnregisterCallback");
+        if (!reg || !unreg) return -98;
+        reg(&object, 102);
+        if (guest_registrations != 1) return -99;
+        struct { int user, id; uint32_t *data; int size; } early;
+        bool (*poll)(int, void *) = dlsym(library, "Steam_BGetCallback");
+        void (*done)(int) = dlsym(library, "Steam_FreeLastCallback");
+        if (!poll || !done || !poll(23, &early) || early.id != 102) return -95;
+        done(23);
+        if (poll(23, &early)) return -96;
+        unreg(&object);
+        if (guest_unregistrations != 1) return -100;
+        if (!create("SteamClient020", &status) || status) return -97;
+    }
     typedef void (*check_fn)(void *, bool (*)(int));
     checked_callback = 0;
     METHOD(legacy, 33, check_fn)(legacy, registered_callback);
@@ -111,5 +149,7 @@ int check_steam(void) {
     uint32_t data[2]; bool failed = true;
     if (!get_result(23, UINT64_C(0xfedcba9876543210), data, sizeof(data), 102, &failed) ||
         failed || data[0] != 0x11223344 || data[1] != 0xaabbccdd) return -78;
+    for (unsigned i = 0; i < sizeof(deep_stack); ++i)
+        if (deep_stack[i] != (unsigned char)(i * 7 + 3)) return -102;
     return dlclose(library) ? -79 : 0;
 }

@@ -1,3 +1,4 @@
+#include <sys/sysctl.h>
 #include "objc_bridge.h"
 #include "arb_program_guard.h"
 #include "audio_bridge.h"
@@ -1716,14 +1717,25 @@ static uintptr_t legacy_scalar_method(id object, SEL selector, uintptr_t a, uint
     NSUInteger count = [signature numberOfArguments] - 2;
     if (count > 4) return 0;
     uintptr_t values[4] = {a, b, c, d};
-    uint32_t extra[4] = {0};
+    uint32_t extra[4] = {0}, temporary[4] = {0};
+    bool void_return = *skip_type_qualifiers([signature methodReturnType]) == 'v';
     for (NSUInteger i = 0; i < count; ++i) {
         const char *type = [signature getArgumentTypeAtIndex:i + 2];
         type = skip_type_qualifiers(type);
+        /* Notification arguments are borrowed for this synchronous callback.
+           Guest retain/copy still preserves the value beyond the callback. */
+        if (*type == '@' && void_return && [(id)values[i] isKindOfClass:[NSNotification class]]) {
+            extra[i] = temporary[i] = proxy_for_owned_value((id)values[i]);
+            continue;
+        }
         extra[i] = *type == '@' || *type == '#' ? proxy_for_object((id)values[i]) :
             *type == ':' ? compat_runtime32_copy_cstring(sel_getName((SEL)values[i])) : (uint32_t)values[i];
     }
-    return legacy_call_method(object, selector, extra, count);
+    uintptr_t result = legacy_call_method(object, selector, extra, count);
+    pthread_mutex_lock(&proxy_lock);
+    for (NSUInteger i = 0; i < count; ++i) if (temporary[i]) release_value_proxy(temporary[i]);
+    pthread_mutex_unlock(&proxy_lock);
+    return result;
 }
 
 static id legacy_object_method(id object, SEL selector, uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d)
@@ -6650,6 +6662,10 @@ static int objc_bridge32_dispatch_body(const char *import_name,
         *result = window || !arguments[0] ? 0 : (uint32_t)paramErr;
         return 1;
     }
+    if (LP32_NAME_IS(import_name, import_length, "_InitCursor")) {
+        [[NSCursor arrowCursor] set];
+        *result = 0; return 1;
+    }
     if (LP32_NAME_IS(import_name, import_length, "_SetSystemUIMode")) {
         [[NSApplication sharedApplication] setPresentationOptions:
             arguments[0] ? (NSApplicationPresentationAutoHideDock | NSApplicationPresentationAutoHideMenuBar) : NSApplicationPresentationDefault];
@@ -8081,6 +8097,12 @@ static int objc_bridge32_dispatch_body(const char *import_name,
                      guest_float_argument(arguments[3]));
         *result = 0; return 1;
     }
+    /* ATI uses frontfunc/backfunc/ref/mask, unlike the core face/func API. */
+    if (LP32_NAME_IS(import_name, import_length, "glStencilFuncSeparateATI")) {
+        glStencilFuncSeparate(GL_FRONT, arguments[0], (GLint)arguments[2], arguments[3]);
+        glStencilFuncSeparate(GL_BACK, arguments[1], (GLint)arguments[2], arguments[3]);
+        *result = 0; return 1;
+    }
     if (LP32_NAME_IS(import_name, import_length, "glStencilFuncSeparate")) {
         glStencilFuncSeparate(arguments[0], arguments[1], arguments[2],
                               arguments[3]);
@@ -8328,6 +8350,19 @@ static int objc_bridge32_dispatch_body(const char *import_name,
     }
     if (LP32_NAME_IS(import_name, import_length, "_IOServiceGetMatchingServices")) {
         CFDictionaryRef matching = (CFDictionaryRef)object_for_argument(arguments[1]);
+        /* L4D1 assumes IOAccelerator parents have PCI vendor/device data.
+           Apple Silicon has no such PCI GPU. Let GLM keep its CGL defaults. */
+        int translated = 0;
+        size_t translated_size = sizeof(translated);
+        if (lp32_profile()->title == LP32_TITLE_L4D1)
+            (void)sysctlbyname("sysctl.proc_translated", &translated, &translated_size, NULL, 0);
+        if (lp32_profile()->title == LP32_TITLE_L4D1 && translated &&
+            [[(NSDictionary *)matching objectForKey:@"IOProviderClass"] isEqual:@"IOAccelerator"]) {
+            if (arguments[2]) *(uint32_t *)(uintptr_t)arguments[2] = 0;
+            fprintf(stderr, "compat32: L4D1 skips legacy PCI accelerator lookup; using CGL renderer data\n");
+            *result = (uint32_t)kIOReturnNotFound;
+            return 1;
+        }
         if (matching) CFRetain(matching); /* IOKit consumes one reference. */
         *result = (uint32_t)IOServiceGetMatchingServices(arguments[0], matching, (io_iterator_t *)(uintptr_t)arguments[2]);
         return 1;
@@ -10237,6 +10272,18 @@ int objc_bridge32_run_gl_buffer_self_test(void)
     objc_bridge32_dispatch("glUnmapBuffer", unmap_arguments, &dispatch_result);
 
     if (test_large_mapped_buffer_upload()) {
+        status = -1;
+        goto cleanup;
+    }
+    /* Distinct front/back functions catch accidental core-API aliasing. */
+    objc_bridge32_dispatch("glStencilFuncSeparateATI",
+        (const uint32_t[]){GL_LESS, GL_GREATER, 0, 0x5a}, &dispatch_result);
+    GLint front = 0, back = 0, mask = 0;
+    glGetIntegerv(GL_STENCIL_FUNC, &front);
+    glGetIntegerv(GL_STENCIL_BACK_FUNC, &back);
+    glGetIntegerv(GL_STENCIL_BACK_VALUE_MASK, &mask);
+    if (front != GL_LESS || back != GL_GREATER || mask != 0x5a) {
+        fputs("gl-buffer-selftest: ATI front/back stencil conversion failed\n", stderr);
         status = -1;
         goto cleanup;
     }

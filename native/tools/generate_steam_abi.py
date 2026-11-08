@@ -260,6 +260,13 @@ methods += [
     ("AddTimelineEvent", "v", "pppiffi"),
     ("SetTimelineGameMode", "v", "i"),
 ]
+# Historical L4D1 interfaces have different ordinals and signatures.
+legacy = json.loads((Path(__file__).parent / "steam_legacy_abi.json").read_text())
+for interface in legacy["interfaces"]:
+    entries = interface["methods"]
+    interfaces.append((interface["version"], len(methods), len(entries)))
+    methods.extend(tuple(entry) for entry in entries)
+
 out = [
     "/* Generated ABI descriptions; see tools/generate_steam_abi.py. */",
     "static const struct steam_method steam_methods[] = {",

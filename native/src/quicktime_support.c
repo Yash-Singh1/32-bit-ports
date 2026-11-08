@@ -92,6 +92,21 @@ static int path_reference(const uint32_t *a)
     return 0;
 }
 
+/* Owned path for other legacy FSRef consumers such as ATS font activation. */
+char *quicktime_support32_reference_path(uint32_t address)
+{
+    if (!guest_range(address, 80)) return NULL;
+    uint32_t reference[20];
+    memcpy(reference, (const void *)(uintptr_t)address, sizeof(reference));
+    if (reference[0] != UINT32_C(0x4c503246) || !reference[1]) return NULL;
+    for (unsigned i = 2; i < 20; ++i) if (reference[i]) return NULL;
+    pthread_mutex_lock(&support_lock);
+    unsigned index = reference[1] - 1;
+    char *path = index < path_count ? strdup(paths[index]) : NULL;
+    pthread_mutex_unlock(&support_lock);
+    return path;
+}
+
 static int catalog_info(const uint32_t *a)
 {
     if (!guest_range(a[0], 80) || a[1] || a[2] || a[3] || a[5] ||

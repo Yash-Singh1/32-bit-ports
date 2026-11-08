@@ -4,9 +4,22 @@
 #include <unistd.h>
 #include <string.h>
 
+extern unsigned char WaitNextEvent(uint16_t, void *, uint32_t, void *);
 int check_mach_ipc(void)
 {
     _Static_assert(sizeof(mach_msg_header_t) == 24, "i386 Mach header");
+    struct { uint32_t before; unsigned char event[16]; uint32_t after; } event = {0x11223344, {0}, 0xaabbccdd};
+    memset(event.event, 0xff, sizeof(event.event));
+    if (WaitNextEvent(0, event.event, 0, 0) || event.event[0] || event.event[1] ||
+        event.before != 0x11223344 || event.after != 0xaabbccdd) return -613;
+    mach_port_t self = mach_thread_self();
+    mach_port_type_t self_type = 0;
+    if (!self || mach_port_type(mach_task_self(), self, &self_type) ||
+        !(self_type & MACH_PORT_TYPE_SEND) || mach_port_deallocate(mach_task_self(), self)) return -611;
+    struct { uint32_t before, words[10], after; } info = {0x11223344, {0}, 0xaabbccdd};
+    mach_msg_type_number_t count = 10;
+    if (task_info(mach_task_self(), 5, (task_info_t)info.words, &count) || count != 10 ||
+        info.before != 0x11223344 || info.after != 0xaabbccdd) return -612;
     mach_port_t channel = 0;
     if (kill(getpid(), 0) || mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &channel)) return -601;
     struct { mach_port_type_t type; uint32_t guard; } type = {0, 0x1234abcd};

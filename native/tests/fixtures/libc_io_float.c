@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 extern float legacy_strtof(const char *, char **) __asm("_strtof");
 static uint32_t float_bits(float value)
@@ -23,6 +24,14 @@ static int check_float(const char *text, uint32_t bits, unsigned offset, int err
 
 int check_libc_io_float(void)
 {
+    /* The fixture loader is an ordinary, non-set-id executable. Chromium
+       uses this query while loading a map; it must reach native libc. */
+    errno = EDOM;
+    if (issetugid() || errno != EDOM) return -1032;
+    FILE *locking = fopen("lockf-fixture.txt", "w+");
+    if (!locking) return -1030;
+    if (lockf(fileno(locking), F_TLOCK, INT64_C(0x100000001)) ||
+        lockf(fileno(locking), F_ULOCK, INT64_C(0x100000001)) || fclose(locking)) return -1031;
     FILE *file = fopen("libc-io.txt","rb");
     if (!file || feof(file) || ferror(file)) return -1012;
     struct { unsigned char data[3]; unsigned char guard; } buffer = {{0},0xa5};

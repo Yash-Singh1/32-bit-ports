@@ -1,7 +1,7 @@
 BUILD_DIR := build
 
 # One loader serves every supported title; the bundle targets pick the title
-# with GAME=pirates (default), GAME=clonewars, GAME=portal2, GAME=mel or GAME=l4d2.
+# with GAME=pirates (default), GAME=clonewars, GAME=portal2, GAME=mel, GAME=l4d2 or GAME=l4d1.
 GAME ?= pirates
 GUEST_RUNTIME_DIR ?= $(BUILD_DIR)/guest-runtime
 ifeq ($(GAME),clonewars)
@@ -61,6 +61,19 @@ ICON := $(SOURCE_GAME)/left4dead2/resource/game.icns
 ICON_NAME := game.icns
 SOURCE_TOOL := $(BUILD_DIR)/l4d2_source
 SOURCE_DATA_DIRECTORY := L4D2
+else ifeq ($(GAME),l4d1)
+BUNDLE := $(BUILD_DIR)/L4D1-Compat.app
+# SOURCE_APP remains an alias when it contains a complete Mac game tree.
+SOURCE_GAME ?= $(if $(strip $(SOURCE_APP)),$(SOURCE_APP),$(HOME)/Library/Application Support/Steam/steamapps/common/left 4 dead)
+IMAGE_PREREQ :=
+IMAGE_NAME := L4D1.image
+LOADER_NAME := L4D1Compat
+INFO_PLIST := Info-L4D1.plist
+GAME_DATA :=
+ICON := $(SOURCE_GAME)/left4dead/resource/game.icns
+ICON_NAME := game.icns
+SOURCE_TOOL := $(BUILD_DIR)/l4d1_source
+SOURCE_DATA_DIRECTORY := L4D1
 else ifeq ($(GAME),pirates)
 BUNDLE := $(BUILD_DIR)/LEGOPirates-Compat.app
 SOURCE_APP := /Volumes/Storage/games/mac/LEGOPirates.app
@@ -78,7 +91,7 @@ GAME_DATA := GAME.DAT GAME0.DAT GAME1.DAT GAME2.DAT GAME3.DAT GAME4.DAT
 ICON := icons/LEGOPirates.icns
 ICON_NAME := icon.icns
 else
-$(error Unknown GAME "$(GAME)"; choose pirates, clonewars, portal2, mel or l4d2)
+$(error Unknown GAME "$(GAME)"; choose pirates, clonewars, portal2, mel, l4d2 or l4d1)
 endif
 # Python for the Pirates unpacker.  By default a venv under $(BUILD_DIR) with
 # `unicorn` installed is created on first use (system and Homebrew Pythons
@@ -354,7 +367,7 @@ mode-switch-stress: $(BUILD_DIR)/mode_switch_stress
 run: $(BUILD_DIR)/mode32_probe
 	arch -x86_64 ./$(BUILD_DIR)/mode32_probe
 
-ifneq ($(filter $(GAME),portal2 l4d2 mel),)
+ifneq ($(filter $(GAME),portal2 l4d2 mel l4d1),)
 run-game: bundle
 	arch -x86_64 "$(BUNDLE)/Contents/MacOS/$(LOADER_NAME)"
 else
@@ -373,10 +386,10 @@ $(BUILD_DIR)/LEGOPirates.unpacked.macbin: tools/unpack_securom.py $(UNPACK_PYTHO
 	test -f "$(PACKED_IMAGE)" || { echo "missing $(PACKED_IMAGE); pass SOURCE_APP=/path/to/LEGOPirates.app" >&2; exit 1; }
 	$(UNPACK_PYTHON) tools/unpack_securom.py "$(PACKED_IMAGE)" "$@"
 
-ifneq ($(filter $(GAME),portal2 l4d2 mel),)
+ifneq ($(filter $(GAME),portal2 l4d2 mel l4d1),)
 bundle: $(BUILD_DIR)/game_loader $(SOURCE_TOOL) $(INFO_PLIST) portal2-runtime
 	./$(SOURCE_TOOL) --copy "$(SOURCE_GAME)" "$(BUNDLE)"
-ifneq ($(filter $(GAME),l4d2 mel),)
+ifneq ($(filter $(GAME),l4d2 mel l4d1),)
 	./$(SOURCE_TOOL) --check-output "$(BUNDLE)"
 endif
 	mkdir -p "$(BUNDLE)/Contents/MacOS"
@@ -403,18 +416,18 @@ endif
 
 # Update only the compatibility runtime when the external source-data volume
 # is unavailable. The existing bundle's game data and resources are retained.
-ifneq ($(filter $(GAME),l4d2 mel),)
+ifneq ($(filter $(GAME),l4d2 mel l4d1),)
 promote-loader: $(SOURCE_TOOL)
 endif
 promote-loader: $(BUILD_DIR)/game_loader
-ifneq ($(filter $(GAME),l4d2 mel),)
+ifneq ($(filter $(GAME),l4d2 mel l4d1),)
 	./$(SOURCE_TOOL) --check-output "$(BUNDLE)"
 endif
 	test -d "$(BUNDLE)/Contents/MacOS"
 	cp $(BUILD_DIR)/game_loader "$(BUNDLE)/Contents/MacOS/$(LOADER_NAME).new"
 	mv "$(BUNDLE)/Contents/MacOS/$(LOADER_NAME).new" "$(BUNDLE)/Contents/MacOS/$(LOADER_NAME)"
 	if test -f "$(ICON)"; then cp "$(ICON)" "$(BUNDLE)/Contents/Resources/$(ICON_NAME)"; fi
-ifneq ($(filter $(GAME),portal2 l4d2 mel),)
+ifneq ($(filter $(GAME),portal2 l4d2 mel l4d1),)
 	codesign --force --sign - "$(BUNDLE)"
 else
 	codesign --force --deep --sign - "$(BUNDLE)"
@@ -439,3 +452,22 @@ clean:
 .PHONY: test-callback-stack
 test-callback-stack: $(BUILD_DIR)/game_loader
 	env LP32_CALLBACK_STACK_ONLY=1 python3 tests/test_guest_dyld.py
+
+L4D1_SOURCE_CORE := converter/Conversion.swift converter/Source.swift converter/L4D1Source.swift
+$(BUILD_DIR)/l4d1_source: $(L4D1_SOURCE_CORE) tools/l4d1_source.swift | $(BUILD_DIR)
+	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -target $(shell uname -m)-apple-macosx11.0 -sdk $(SDK) $^ -o $@
+
+$(BUILD_DIR)/test_l4d1_source: $(L4D1_SOURCE_CORE) tests/test_l4d1_source.swift | $(BUILD_DIR)
+	$(SWIFTC) -O -swift-version 5 -warnings-as-errors -target $(shell uname -m)-apple-macosx11.0 -sdk $(SDK) $^ -o $@
+.PHONY: test-l4d1-source
+test-l4d1-source: $(BUILD_DIR)/test_l4d1_source
+	./$(BUILD_DIR)/test_l4d1_source
+
+.PHONY: test-l4d1-loader test-l4d1-runtime
+test-l4d1-loader: $(BUILD_DIR)/game_loader
+	$(MAKE) GAME=l4d1 test-l4d1-loader-image
+.PHONY: test-l4d1-loader-image
+test-l4d1-loader-image: bundle
+	env LP32_DYLD_SELFTEST=1 arch -x86_64 "$(BUNDLE)/Contents/MacOS/$(LOADER_NAME)"
+test-l4d1-runtime: $(BUILD_DIR)/game_loader
+	env LP32_TEST_GAME=l4d1 LP32_TEST_EXECUTABLE=hl2_osx python3 tests/test_guest_dyld.py

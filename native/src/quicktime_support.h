@@ -13,6 +13,7 @@ int quicktime_support32_dispatch(const char *name, const uint32_t *arguments,
 
 /* Returns an owned copy, or NULL for a closed/invalid signed16 file ref.
    NewMovieFromFile must copy/consume this path before CloseMovieFile. */
+char *quicktime_support32_reference_path(uint32_t reference);
 char *quicktime_support32_file_path(int16_t reference);
 
 /* Native decoded frames are copied into owned guest32 storage. No host pointer

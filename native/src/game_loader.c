@@ -752,7 +752,7 @@ static const char *default_image_path(const char *argv0, char *buffer,
                                       size_t size,
                                       const struct lp32_game_profile **hint)
 {
-    static const char *const candidates[] = {"LEGOPirates", "LEGOCloneWars", "Portal2", "PortalStoriesMel", "L4D2"};
+    static const char *const candidates[] = {"LEGOPirates", "LEGOCloneWars", "Portal2", "PortalStoriesMel", "L4D2", "L4D1"};
     const char *slash = strrchr(argv0, '/');
     size_t directory_length = slash ? (size_t)(slash - argv0) : 0;
     for (size_t index = 0; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {
@@ -1003,9 +1003,13 @@ int main(int argc, char **argv)
         uint32_t extra_argument = extra_argument_text && extra_argument_text[0] ?
             compat_runtime32_copy_cstring(extra_argument_text) : 0;
         bool source_game = lp32_profile_is_source();
+        bool l4d1 = lp32_profile()->title == LP32_TITLE_L4D1;
+        const char *audio_mode = getenv("LP32_L4D1_AUDIO");
+        bool l4d1_nosound = l4d1 && (!audio_mode || strcmp(audio_mode, "1"));
         int argument_start = argc >= 2 && argv[1][0] != '-' ? 2 : 1;
         uint32_t forwarded = source_game ? (uint32_t)(argc - argument_start) : 0;
-        uint32_t guest_argc = 1 + (extra_argument ? 1 : 0) + (source_game ? 3 : 0) + forwarded;
+        uint32_t guest_argc = 1 + (extra_argument ? 1 : 0) + (source_game ? 3 : 0) +
+                              (l4d1 ? 1 : 0) + (l4d1_nosound ? 1 : 0) + forwarded;
         uint32_t argv_address = compat_runtime32_allocate(
             (guest_argc + 1) * sizeof(uint32_t), 1);
         uint32_t empty_vector = compat_runtime32_allocate(sizeof(uint32_t), 1);
@@ -1023,8 +1027,13 @@ int main(int argc, char **argv)
             /* Keep the existing direct-to-menu launch behavior. In-game Bink
                movies use the Sound Manager and Time Manager bridges. */
             guest_argv[next_argument++] = compat_runtime32_copy_cstring(
-                lp32_profile()->title == LP32_TITLE_L4D2 ? "-steam" : "-novid");
+                (lp32_profile()->title == LP32_TITLE_L4D2 ||
+                 lp32_profile()->title == LP32_TITLE_L4D1) ? "-steam" : "-novid");
         }
+        /* Finder and Dock launches use the verified L4D1 startup settings.
+           Audio can be enabled explicitly for diagnostic runs. */
+        if (l4d1) guest_argv[next_argument++] = compat_runtime32_copy_cstring("-novid");
+        if (l4d1_nosound) guest_argv[next_argument++] = compat_runtime32_copy_cstring("-nosound");
         if (extra_argument) guest_argv[next_argument++] = extra_argument;
         for (uint32_t i = 0; i < forwarded; ++i) {
             guest_argv[next_argument++] = compat_runtime32_copy_cstring(argv[argument_start + i]);

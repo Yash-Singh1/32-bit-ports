@@ -11,12 +11,12 @@ import time
 NATIVE = Path(__file__).resolve().parents[1]
 LOADER = Path(os.getenv("LP32_TEST_LOADER", str(NATIVE / "build/game_loader"))).resolve()
 TEST_GAME = os.getenv("LP32_TEST_GAME", "portal2")
-if TEST_GAME not in ("portal2", "l4d2"):
-    raise ValueError("LP32_TEST_GAME must select portal2 or l4d2")
+if TEST_GAME not in ("portal2", "l4d2", "l4d1"):
+    raise ValueError("LP32_TEST_GAME must select portal2, l4d2 or l4d1")
 TEST_EXECUTABLE = os.getenv("LP32_TEST_EXECUTABLE", "portal2_osx" if TEST_GAME == "portal2" else "")
 if not TEST_EXECUTABLE or Path(TEST_EXECUTABLE).name != TEST_EXECUTABLE:
     raise ValueError("LP32_TEST_EXECUTABLE must name the audited original Source executable")
-TEST_DATA_DIRECTORY = "Portal2" if TEST_GAME == "portal2" else "L4D2"
+TEST_DATA_DIRECTORY = "Portal2" if TEST_GAME == "portal2" else ("L4D1" if TEST_GAME == "l4d1" else "L4D2")
 
 
 def run(*args, **kwargs):
@@ -57,7 +57,7 @@ exports:
       _FindNextComponent, _OpenAComponent, _CloseComponent, _AudioUnitSetProperty, _AudioUnitGetProperty, _AudioUnitGetPropertyInfo,
       _AudioUnitInitialize, _AudioUnitUninitialize, _AudioUnitRender, _alcCaptureOpenDevice, _alcCaptureCloseDevice, _alcGetError,
       _printf, _fflush, _malloc, _memcmp, _bsearch, _qsort, _abort, _feof, _ferror, _fopen, _fopen$UNIX2003, _fclose,
-      _fread, _fgetc, _fseek, _clearerr, _strtof, _strtof$UNIX2003,
+      _fread, _fgetc, _fseek, _clearerr, _strtof, _strtof$UNIX2003, _issetugid,
       ___stdoutp, __NSGetExecutablePath, _getcwd,
       _strcmp, _strncmp, _strcasecmp, _strrchr, ___toupper, ___tolower, _strncpy, _lp32_unavailable, _stat, _stat$INODE64, _open$UNIX2003, _open,
       _close, _close$UNIX2003, _lseek, _scandir, _alphasort, _free,
@@ -71,7 +71,7 @@ exports:
       _setsockopt, _getsockopt, _sendto, _sendto$UNIX2003, _recvfrom, _recvfrom$UNIX2003,
       _select, _select$UNIX2003, _select$DARWIN_EXTSN, _ioctl, _popen, _popen$UNIX2003,
       _pclose, _valloc, _realloc, _malloc_size, _MPCreateCriticalRegion, _MPDeleteCriticalRegion,
-      _MPEnterCriticalRegion, _MPExitCriticalRegion, _NSIsSymbolNameDefined, _NSLookupAndBindSymbol, _NSAddressOfSymbol, _NSModuleForSymbol,
+      _MPEnterCriticalRegion, _MPExitCriticalRegion, _NSIsSymbolNameDefined, _NSLookupAndBindSymbol, _NSAddressOfSymbol, _NSModuleForSymbol, _NSUnLinkModule,
       _NSLibraryNameForModule, _fgets, _fgets$UNIX2003, ___darwin_check_fd_set_overflow, _getsockname$UNIX2003, _mktime$UNIX2003,
       _CFStringCreateWithBytes, _CFStringGetLength, _CFRetain,
       _CFEqual, _CFStringCreateWithFormat, _CFStringGetCString,
@@ -92,7 +92,7 @@ exports:
       _kCFTypeArrayCallBacks, _kCFTypeDictionaryKeyCallBacks,
       _kCFTypeDictionaryValueCallBacks, _kCFCopyStringDictionaryKeyCallBacks,
       _kCFBooleanTrue, _kCFBooleanFalse,
-      _CFStringCreateWithCString, _ATSFontFindFromName, _ATSUCreateStyle, _ATSUSetAttributes, _ATSUCreateTextLayoutWithTextPtr, _ATSUSetLayoutControls,
+      _WaitNextEvent, _mach_thread_self, _task_info, _fileno, _lockf, _lockf$UNIX2003, _CFStringCreateWithCString, _ATSFontActivateFromFileReference, _ATSFontFindFromName, _ATSUCreateStyle, _ATSUSetAttributes, _ATSUCreateTextLayoutWithTextPtr, _ATSUSetLayoutControls,
       _ATSUDirectGetLayoutDataArrayPtrFromTextLayout, _ATSUGlyphGetScreenMetrics, _ATSUDrawText, _ATSUDisposeTextLayout, _ATSUDisposeStyle, _CGColorSpaceCreateDeviceRGB,
       _CGColorSpaceRelease, _CGBitmapContextCreate, _CGBitmapContextGetData, _CGContextRelease, ___stack_chk_guard, ___stack_chk_fail,
       dyld_stub_binder
@@ -168,6 +168,7 @@ extern int NSIsSymbolNameDefined(const char *);
 extern void *NSLookupAndBindSymbol(const char *);
 extern void *NSAddressOfSymbol(void *);
 extern void *NSModuleForSymbol(void *);
+extern _Bool NSUnLinkModule(void *, unsigned);
 extern const char *NSLibraryNameForModule(void *);
 int (*dependency_pointer)(void) = dependency_value;
 int initialized, count;
@@ -365,6 +366,12 @@ int LauncherMain(void) {
     if (!NSIsSymbolNameDefined("_LauncherMain") || NSIsSymbolNameDefined("_lp32_unavailable")) return -56;
     void *legacy_symbol = NSLookupAndBindSymbol("_LauncherMain");
     void *legacy_module = NSModuleForSymbol(legacy_symbol);
+    if (!NSUnLinkModule(legacy_module, 0) ||
+        !NSUnLinkModule(legacy_module, 3) ||
+        NSUnLinkModule(legacy_module, 8) ||
+        NSUnLinkModule((void *)0x0865c000, 0) ||
+        NSUnLinkModule(0, 0)) return -1033;
+    if (!dlerror() || !NSIsSymbolNameDefined("_LauncherMain")) return -1034;
     const char *legacy_path = NSLibraryNameForModule(legacy_module);
     if (NSAddressOfSymbol(legacy_symbol) != (void *)&LauncherMain || !legacy_module ||
         !legacy_path || !legacy_path[0]) return -57;
@@ -523,7 +530,7 @@ int check_directory(void) {
             continue
         for index, error in enumerate((65, 2, 13, 0, -1, -2147483648, 2147483647, 123456789)):
             environment[f"LP32_STRERROR_{index}"] = os.strerror(error)
-        if TEST_GAME == "l4d2":
+        if TEST_GAME in ("l4d2", "l4d1"):
             environment["LP32_FIXTURE_QUICKTIME"] = "1"
         if TEST_GAME == "portal2" and version == "10.5" and address == 0 and not os.getenv("LP32_CF_BRIDGE_ONLY"):
             logs = root / "logs"
@@ -665,7 +672,7 @@ int check_directory(void) {
         data = support / TEST_DATA_DIRECTORY
         if not data.exists():
             data.symlink_to(root, target_is_directory=True)
-        bundled_image = support / ("Portal2.image" if TEST_GAME == "portal2" else "L4D2.image")
+        bundled_image = support / (TEST_DATA_DIRECTORY + ".image")
         bundled_image.write_bytes(image.read_bytes())
         run("arch", "-x86_64", str(LOADER), str(bundled_image), env=environment)
         print(f"Guest dylib fixtures: PASS ({TEST_GAME}, macOS {version}, preferred address 0x{address:x}; bin, osx32, bundle)")

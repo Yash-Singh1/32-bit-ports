@@ -459,7 +459,7 @@ static uint32_t resolve_symbol(struct module32 *m, const char *name, int ordinal
             result = exported(&modules[dep], name);
             if (!result && !weak) fail("%s does not export %s (needed by %s)",
                                       modules[dep].path, name, m->path);
-            return result;
+            return data ? result : steam_bridge32_wrap_export(name, result);
         }
     } else if (ordinal > 0 && ordinal < 0xfe) {
         fail("invalid library ordinal for %s", name);
@@ -469,7 +469,7 @@ static uint32_t resolve_symbol(struct module32 *m, const char *name, int ordinal
     if (!result && weak && (name[0] != '_' || !dlsym(RTLD_DEFAULT, name + 1))) return 0;
     if (!result) result = compat_runtime32_resolve_symbol(name, data);
     if (!result) fail("cannot bridge %s (needed by %s)", name, m->path);
-    return result;
+    return data ? result : steam_bridge32_wrap_export(name, result);
 }
 
 static uint32_t resolve_nlist(struct module32 *m, uint32_t index, bool data)
@@ -937,7 +937,7 @@ uint32_t guest_dyld32_open(const char *name, int flags)
     pthread_mutex_lock(&loader_lock);
     error_pending = false;
     uint32_t result = 0;
-    if (lp32_profile()->title == LP32_TITLE_L4D2 &&
+    if ((lp32_profile()->title == LP32_TITLE_L4D2 || lp32_profile()->title == LP32_TITLE_L4D1) &&
         (result = quicktime_support32_open(name))) {
         /* Native AVFoundation backs this scoped obsolete framework surface. */
     } else if (name && system_path(name)) {
@@ -976,11 +976,15 @@ uint32_t guest_dyld32_symbol(uint32_t handle, const char *symbol)
         result = steam_bridge32_symbol(symbol);
         if (!result) fail("native Steam symbol %s is unavailable", symbol);
     } else if (handle == LP32_QUICKTIME_FRAMEWORK_HANDLE &&
-               lp32_profile()->title == LP32_TITLE_L4D2) {
+               (lp32_profile()->title == LP32_TITLE_L4D2 || lp32_profile()->title == LP32_TITLE_L4D1)) {
         result = quicktime_support32_symbol(handle, symbol);
         if (!result) fail("QuickTime compatibility symbol %s is unavailable", symbol);
     } else if (handle == HANDLE_BASE || handle == (uint32_t)(uintptr_t)RTLD_DEFAULT) {
-        result = global_symbol(name);
+        /* L4D1 resolves QuickDraw entry points with RTLD_DEFAULT rather
+           than opening QuickTime.framework like L4D2. Use the same shim. */
+        if (lp32_profile()->title == LP32_TITLE_L4D1)
+            result = quicktime_support32_symbol(LP32_QUICKTIME_FRAMEWORK_HANDLE, symbol);
+        if (!result) result = global_symbol(name);
         if (!result && dlsym(RTLD_DEFAULT, symbol)) result = compat_runtime32_resolve_symbol(name, false);
         if (!result) fail("symbol %s not found", symbol);
     } else if (handle > HOST_HANDLE_BASE && handle - HOST_HANDLE_BASE <= host_module_count) {
@@ -996,6 +1000,7 @@ uint32_t guest_dyld32_symbol(uint32_t handle, const char *symbol)
         }
         if (!result) fail("symbol %s not found in %s", symbol, m->path);
     } else fail("invalid guest dylib handle 0x%08x", handle);
+    result = steam_bridge32_wrap_export(name, result);
     pthread_mutex_unlock(&loader_lock);
     return result;
 }
@@ -1003,7 +1008,7 @@ uint32_t guest_dyld32_symbol(uint32_t handle, const char *symbol)
 int guest_dyld32_close(uint32_t handle)
 {
     if (handle == LP32_STEAM_CLIENT_HANDLE) return 0;
-    if (handle == LP32_QUICKTIME_FRAMEWORK_HANDLE && lp32_profile()->title == LP32_TITLE_L4D2) return 0;
+    if (handle == LP32_QUICKTIME_FRAMEWORK_HANDLE && (lp32_profile()->title == LP32_TITLE_L4D2 || lp32_profile()->title == LP32_TITLE_L4D1)) return 0;
     if (handle > HOST_HANDLE_BASE && handle - HOST_HANDLE_BASE <= host_module_count) return 0;
     if (handle < HANDLE_BASE || handle - HANDLE_BASE > module_count) return fail("invalid dlclose handle");
     return 0;

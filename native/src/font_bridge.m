@@ -1,4 +1,5 @@
 #include "font_bridge.h"
+#include "quicktime_support.h"
 #include "objc_bridge.h"
 #include "compat_runtime.h"
 #import <Foundation/Foundation.h>
@@ -123,8 +124,15 @@ static int dispatch(const char *name, const uint32_t *a, uint64_t *r)
 #define PTR(i) ((void *)(uintptr_t)a[i])
 #define FAIL() do { *r = (uint32_t)-50; return 1; } while (0)
     *r = 0;
-    if (IS("_ATSFontActivateFromMemory")) {
-        CFDataRef data = CFDataCreate(NULL, PTR(0), a[1]);
+    if (IS("_ATSFontActivateFromMemory") || IS("_ATSFontActivateFromFileReference")) {
+        bool from_file = IS("_ATSFontActivateFromFileReference");
+        CFDataRef data = NULL;
+        if (from_file) {
+            char *path = quicktime_support32_reference_path(a[0]);
+            NSData *contents = path ? [NSData dataWithContentsOfFile:[NSString stringWithUTF8String:path]] : nil;
+            if (contents) data = CFDataCreate(NULL, [contents bytes], [contents length]);
+            free(path);
+        } else data = CFDataCreate(NULL, PTR(0), a[1]);
         CFArrayRef descriptors = data ? CTFontManagerCreateFontDescriptorsFromData(data) : NULL;
         uint32_t first = 0;
         for (CFIndex i = 0; descriptors && i < CFArrayGetCount(descriptors); ++i) {
@@ -133,7 +141,8 @@ static int dispatch(const char *name, const uint32_t *a, uint64_t *r)
             if (font) CFRelease(font);
         }
         if (descriptors) CFRelease(descriptors); if (data) CFRelease(data);
-        if (a[6]) *(uint32_t *)PTR(6) = first;
+        unsigned output = from_file ? 5 : 6;
+        if (a[output]) *(uint32_t *)PTR(output) = first;
         if (!first) FAIL();
     } else if (IS("_ATSFontFindFromName") || IS("_ATSFontFindFromPostScriptName")) {
         CFStringRef string = objc_bridge32_host_object(a[0]);

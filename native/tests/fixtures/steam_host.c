@@ -10,6 +10,9 @@ static void *parental_table[6];
 static struct object parental = {parental_table};
 static void *http_table[25];
 static struct object http = {http_table};
+static void **client09_table[22], *friends05_table[24];
+static struct object friends05 = {friends05_table};
+static struct object client09 = {client09_table};
 static void *client_table[42], *user_table[32], *utils_table[38], *stats_table[45];
 static void *storage_table[59];
 static struct object client17 = {client17_table};
@@ -40,6 +43,13 @@ static bool ugc_details(void *self, uint64_t content, unsigned *app,
     if (owner) *owner = UINT64_C(0xfedcba9876543210);
     return true;
 }
+struct friend_info { uint64_t game; uint32_t ip; uint16_t port, query; uint64_t lobby; };
+_Static_assert(sizeof(struct friend_info) == 24, "FriendGameInfo_t layout");
+static bool friend_game(void *self, uint64_t id, struct friend_info *out) {
+    if (self != &friends05 || id != UINT64_C(0x123456789abcdef0)) abort();
+    *out = (struct friend_info){UINT64_C(0x1122334455667788), 0x7f000001, 27015, 27016, UINT64_C(0xfedcba9876543210)};
+    return true;
+}
 static uint64_t steam_id(void *self) { if (self != &user) abort(); return UINT64_C(0x123456789abcdef0); }
 static unsigned app_id(void *self) { if (self != &utils) abort(); return 620; }
 static const char *country(void *self) { if (self != &utils) abort(); return "fixture-country"; }
@@ -53,8 +63,8 @@ static void set_check(void *self, bool (*check)(int)) {
     if (self == &client && getenv("LP32_FIXTURE_NESTED_IMPORT_CRASH"))
         (void)*(volatile unsigned char *)(uintptr_t)1;
 }
-static void run_frame(void *self) { if (self != &client17) abort(); ++frames; }
-static unsigned ipc_count(void *self) { if (self != &client17) abort(); return frames; }
+static void run_frame(void *self) { if (self != &client17 && self != &client09) abort(); ++frames; }
+static unsigned ipc_count(void *self) { if (self != &client17 && self != &client09) abort(); return frames; }
 static bool parental_enabled(void *self) { if (self != &parental) abort(); return true; }
 static uint64_t subscribed_files(void *self, unsigned start) { if (self != &storage || start != 0) abort(); return UINT64_C(0x123456789abcdef0); }
 static unsigned http_request(void *self, int method, const char *url) {
@@ -74,6 +84,16 @@ static void *get_interface(void *self, int u, int p, const char *version) {
 void *CreateInterface(const char *version, int *result) {
     if (!ugc_name) ugc_name = strdup("workshop/fixture-chamber.bsp");
     callback_count = 0;
+    if (!strcmp(version, "SteamFriends005")) {
+        friends05_table[9] = friend_game;
+        if (result) *result = 0;
+        return &friends05;
+    }
+    if (!strcmp(version, "SteamClient009")) {
+        frames = 0; client09_table[19] = run_frame; client09_table[20] = ipc_count;
+        if (result) *result = 0;
+        return &client09;
+    }
     if (!strcmp(version, "SteamClient017")) {
         frames = 0; client17_table[36] = get_interface; parental_table[0] = parental_enabled; client17_table[23] = get_interface; client17_table[33] = set_check;
         http_table[0] = http_request; client17_table[19] = run_frame; client17_table[20] = ipc_count;

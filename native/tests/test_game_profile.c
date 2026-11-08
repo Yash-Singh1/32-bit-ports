@@ -57,10 +57,16 @@ int main(void)
 
     image.entry_eip = l4d->entry_eip;
     image.max_address = l4d->image_end;
-    assert(lp32_profile_select(&image) == 0 && lp32_profile() == l4d);
+    assert(lp32_profile_select(&image) != 0); /* L4D1 shares this fingerprint. */
     assert(lp32_profile_select_hint(&image, l4d) == 0 && lp32_profile() == l4d);
     assert(lp32_profile_select_hint(&image, mel) != 0);
     assert(lp32_profile()->title == LP32_TITLE_UNKNOWN);
+    const struct lp32_game_profile *l4d1 = lp32_profile_named("left4dead");
+    assert(l4d1 && l4d1 == lp32_profile_named("l4d1"));
+    assert(l4d1->steam_app_id == 500);
+    assert(!strcmp(l4d1->source_game_directory, "left4dead"));
+    assert(lp32_profile_select_hint(&image, l4d1) == 0 && lp32_profile() == l4d1);
+    assert(lp32_profile_is_source());
     image.entry_eip = 0;
     image.max_address = 0;
     assert(lp32_profile_select(&image) != 0);

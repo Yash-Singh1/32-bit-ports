@@ -20,6 +20,7 @@ enum lp32_title {
     LP32_TITLE_CLONE_WARS,
     LP32_TITLE_PORTAL2,
     LP32_TITLE_L4D2,
+    LP32_TITLE_L4D1,
 };
 
 /* Splash-dismiss repeat latch (see game_loader.c). */
