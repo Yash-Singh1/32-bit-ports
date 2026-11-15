@@ -220,7 +220,8 @@ final class LEGOConverter {
                                 "-c", source.appendingPathComponent("libcpp_stream_bridge.cpp").path, "-o", object.path])
         let output = destination.appendingPathComponent("game_loader")
         var args = common + ["--ld-path=" + toolchain.appendingPathComponent("bin/ld").path,
-            "-Wl,-no_pie,-pagezero_size,0x1000,-segaddr,__TEXT,0x100000000,-segaddr,__LEGACY,0x1000,-segprot,__LEGACY,rwx,rwx"]
+            // Keep ld-classic's huge-data pass from moving __LEGACY into __DATA.
+            "-Wl,-no_huge,-no_pie,-pagezero_size,0x1000,-segaddr,__TEXT,0x100000000,-segaddr,__LEGACY,0x1000,-segprot,__LEGACY,rwx,rwx"]
         args += sources.map { source.appendingPathComponent($0).path }
         args += [object.path, "-lc++", "-lffi", "-lcurl", "-lz"]
         for framework in frameworks { args += ["-framework", framework] }

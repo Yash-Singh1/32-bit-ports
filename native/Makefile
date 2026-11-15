@@ -210,7 +210,9 @@ CLANG := $(shell xcrun --find clang)
 SDK := $(shell xcrun --sdk macosx --show-sdk-path)
 CFLAGS := -arch x86_64 -isysroot $(SDK) -mmacosx-version-min=11.0 -O2 -g -Wall -Wextra -Werror
 CXXFLAGS := $(CFLAGS) -std=c++11
-LDFLAGS := -Wl,-no_pie,-pagezero_size,0x1000,-segaddr,__TEXT,0x100000000,-segaddr,__LEGACY,0x1000,-segprot,__LEGACY,rwx,rwx
+# ld-classic's huge-data pass moves the 2 GiB reservation into __DATA,
+# leaving __LEGACY empty. Keep it at its fixed low address with either linker.
+LDFLAGS := -Wl,-no_huge,-no_pie,-pagezero_size,0x1000,-segaddr,__TEXT,0x100000000,-segaddr,__LEGACY,0x1000,-segprot,__LEGACY,rwx,rwx
 
 .PHONY: test-game-profile all bundle promote-loader icons clean run run-game controller-probe game-info test-controller test-arb-program-guard test-arb-sampler-usage mode-switch-stress
 
@@ -255,8 +257,11 @@ $(BUILD_DIR):
 	mkdir -p $@
 
 $(BUILD_DIR)/mode32_probe: src/mode32_probe.c src/mode32_switch.S src/address_space_reserve.S | $(BUILD_DIR)
-	$(CLANG) $(CFLAGS) $(LDFLAGS) $^ -o $@
+	$(CLANG) $(CFLAGS) $(LDFLAGS) $(filter %.c %.S,$^) -o $@
 	codesign --force --sign - $@
+
+# Relink existing builds when the reservation flags change.
+$(BUILD_DIR)/mode32_probe $(BUILD_DIR)/game_loader $(BUILD_DIR)/test_macho_mapping: Makefile
 
 # Keep the C++ standard out of the mixed C/Objective-C loader invocation.
 $(BUILD_DIR)/libcpp_stream_bridge.o: src/libcpp_stream_bridge.cpp src/compat_runtime.h src/macho_loader.h Makefile | $(BUILD_DIR)
@@ -309,6 +314,11 @@ $(BUILD_DIR)/test_macho_missing_reservation: tests/test_macho_mapping.c src/mach
 test-macho-mapping: $(BUILD_DIR)/test_macho_mapping $(BUILD_DIR)/test_macho_missing_reservation
 	arch -x86_64 ./$(BUILD_DIR)/test_macho_mapping
 	arch -x86_64 ./$(BUILD_DIR)/test_macho_missing_reservation missing
+
+# Optional regression check for toolchains that still ship ld-classic.
+.PHONY: test-macho-mapping-classic
+test-macho-mapping-classic:
+	$(MAKE) BUILD_DIR="$(BUILD_DIR)/classic" LDFLAGS="$(LDFLAGS) -Wl,-ld_classic" test-macho-mapping
 
 test-crash-diagnostics: $(BUILD_DIR)/game_loader
 	python3 tests/test_crash_diagnostics.py $(BUILD_DIR)/game_loader

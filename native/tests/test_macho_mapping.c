@@ -84,6 +84,29 @@ int main(int argc, char **argv)
         assert(*(uint8_t *)host == 0x7b && mapped_segments == 0);
         munmap(host, 4096);
     } else {
+        /* Check the linked layout before touching low memory, so a linker
+           that moves zerofill into __DATA fails with an assertion, not SIGSEGV.
+           The runtime also needs the heap, stacks and bridges up to 2 GiB. */
+        const struct mach_header_64 *host =
+            (const void *)_dyld_get_image_header(0);
+        assert(!(host->flags & MH_PIE));
+        const struct load_command *command = (const void *)(host + 1);
+        bool found = false;
+        for (uint32_t i = 0; i < host->ncmds; ++i) {
+            if (command->cmd == LC_SEGMENT_64) {
+                const struct segment_command_64 *segment = (const void *)command;
+                if (!strncmp(segment->segname, "__LEGACY", 16)) {
+                    assert(segment->vmaddr == 0x1000);
+                    assert(segment->vmsize == 0x7ffff000);
+                    assert(segment->filesize == 0);
+                    assert(segment->initprot == VM_PROT_ALL);
+                    assert(segment->maxprot == VM_PROT_ALL);
+                    found = true;
+                }
+            }
+            command = (const void *)((const uint8_t *)command + command->cmdsize);
+        }
+        assert(found);
         *(uint8_t *)0x3000 = 0x69; /* A gap must retain its reservation. */
         assert(macho_image32_load(path, &image) == 0);
         assert(mapped_segments == 3 && image.header == (void *)0x1000);

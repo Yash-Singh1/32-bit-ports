@@ -104,6 +104,17 @@ before the game image loads. After loading, the session log is in the game's
 log directory, such as `~/Library/Logs/LEGOCloneWarsCompat/last-run.log`.
 Include these logs when reporting a launch failure.
 
+If an older build exits with `host is missing its fixed legacy-address
+reservation`, rebuild the compatibility app with the current source. Apple's
+classic linker can move the low-address reservation into `__DATA`; the build
+disables its huge-data pass with `-no_huge` to keep the reservation in
+`__LEGACY`. Rebuild the converter with `make -C native converter` if you use it
+to create your apps.
+
+To check the reservation without an installed game, run
+`make -C native test-macho-mapping`. Toolchains that include `ld-classic` can
+also run `make -C native test-macho-mapping-classic`.
+
 Display regression checks can run without loading a game or changing the
 system display layout:
 
